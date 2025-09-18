@@ -366,4 +366,4 @@ def demonstrate_prediction():
     print(f"Expected change: {((next_day_pred - current_price) / current_price * 100):+.2f}%")
 
 if __name__ == "__main__":
-    demonstrate_improved_prediction()
+    demonstrate_prediction()
