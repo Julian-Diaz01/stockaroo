@@ -1,0 +1,224 @@
+Metadata-Version: 2.4
+Name: stockaroo
+Version: 1.0.0
+Summary: A comprehensive Python package for stock analysis and prediction using machine learning
+Home-page: https://github.com/yourusername/stockaroo
+Author: Stock Analytics Team
+Author-email: contact@stockaroo.com
+Project-URL: Bug Reports, https://github.com/yourusername/stockaroo/issues
+Project-URL: Source, https://github.com/yourusername/stockaroo
+Project-URL: Documentation, https://stockaroo.readthedocs.io/
+Keywords: stock,finance,machine learning,prediction,analysis,yahoo finance
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Financial and Insurance Industry
+Classifier: Intended Audience :: Science/Research
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Office/Business :: Financial :: Investment
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: yfinance>=0.2.18
+Requires-Dist: pandas>=2.0.0
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: scikit-learn>=1.3.0
+Requires-Dist: matplotlib>=3.7.0
+Requires-Dist: seaborn>=0.12.0
+Requires-Dist: jupyter>=1.0.0
+Requires-Dist: streamlit>=1.28.0
+Requires-Dist: plotly>=5.15.0
+Provides-Extra: dev
+Requires-Dist: pytest>=6.0; extra == "dev"
+Requires-Dist: pytest-cov>=2.0; extra == "dev"
+Requires-Dist: black>=21.0; extra == "dev"
+Requires-Dist: flake8>=3.8; extra == "dev"
+Requires-Dist: mypy>=0.800; extra == "dev"
+Provides-Extra: docs
+Requires-Dist: sphinx>=4.0; extra == "docs"
+Requires-Dist: sphinx-rtd-theme>=1.0; extra == "docs"
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: keywords
+Dynamic: project-url
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
+# Stock Analytics Project
+
+A Python project for stock analysis and prediction using Yahoo Finance API and machine learning.
+
+## Features
+
+- Data collection from Yahoo Finance API
+- Stock price analysis and visualization
+- Machine learning models for price prediction
+- Linear regression, Ridge, Lasso, and Random Forest models
+- Technical indicators (MA, MACD, RSI, Bollinger Bands)
+- Feature engineering with lag features
+- Model performance evaluation and comparison
+
+## Setup
+
+1. Create and activate virtual environment:
+```bash
+python -m venv .venv
+.venv\Scripts\Activate.ps1  # Windows PowerShell
+# or
+source .venv/bin/activate   # Linux/Mac
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+3. Run the analysis:
+```bash
+# Install the package in development mode
+pip install -e .
+
+# Web UI (Recommended)
+stockaroo ui             # Launch interactive web dashboard
+# or
+streamlit run stockaroo/ui/streamlit_app.py
+
+# Command line analysis
+stockaroo analyze AAPL  # Analyze Apple stock
+stockaroo analyze MSFT --period 2y --models linear_regression lasso
+
+# Legacy scripts (still available)
+python main_new.py      # New main entry point
+python simple_main.py   # Legacy main script
+python demo.py          # Quick demo
+```
+
+## Project Structure
+
+```
+stockaroo/
+├── stockaroo/                 # Main package
+│   ├── __init__.py           # Package initialization
+│   ├── cli.py               # Command line interface
+│   ├── data/                # Data collection and preprocessing
+│   │   ├── collector.py     # Yahoo Finance data collection
+│   │   └── preprocessor.py  # Data preprocessing and feature engineering
+│   ├── models/              # Machine learning models
+│   │   └── predictor.py     # ML models and evaluation
+│   ├── ui/                  # User interfaces
+│   │   └── streamlit_app.py # Web dashboard
+│   ├── utils/               # Utility functions
+│   │   └── visualizer.py    # Data visualization
+│   └── config/              # Configuration management
+│       └── settings.py      # Application settings
+├── tests/                   # Test suite
+├── docs/                    # Documentation
+├── setup.py                 # Package setup
+├── requirements.txt         # Dependencies
+├── main_new.py             # New main entry point
+└── README.md               # Project documentation
+```
+
+## Current Analysis Results
+
+- **Stock**: Apple (AAPL)
+- **Interval**: 1 day
+- **Data Period**: 2 years
+- **Best Model**: Lasso Regression
+- **R² Score**: 0.9432 (94.32% accuracy)
+- **RMSE**: $3.19
+- **MAPE**: 1.03%
+
+## Model Performance
+
+| Model | R² Score | RMSE | MAPE |
+|-------|----------|------|------|
+| Lasso | 0.9432 | $3.19 | 1.03% |
+| Ridge | 0.9417 | $3.24 | 1.05% |
+| Linear Regression | 0.9396 | $3.30 | 1.06% |
+| Random Forest | 0.8367 | $5.42 | 2.03% |
+
+## Key Features Created
+
+- **Technical Indicators**: Moving averages, MACD, RSI, Bollinger Bands
+- **Lag Features**: Previous day prices and returns
+- **Price Metrics**: Daily returns, price changes, spreads
+- **Volume Analysis**: Volume ratios and moving averages
+
+## 🌐 Web Interface Features
+
+The interactive web dashboard provides:
+
+- **📊 Real-time Stock Data**: Fetch data for any stock symbol
+- **⚙️ Parameter Controls**: Adjust analysis parameters in real-time
+- **📈 Interactive Charts**: Zoom, pan, and explore price data
+- **🤖 Model Comparison**: Compare multiple ML models side-by-side
+- **🔍 Feature Analysis**: Visualize feature importance
+- **🎯 Prediction Accuracy**: See predictions vs actual values
+- **🔮 Future Forecasts**: Get next-day price predictions
+- **📊 Technical Indicators**: RSI, MACD, Bollinger Bands, and more
+
+### Launch Web UI
+```bash
+stockaroo ui
+```
+
+## Usage Examples
+
+### Web Interface (Recommended)
+```bash
+stockaroo ui              # Launch interactive dashboard
+```
+
+### Quick Demo
+```bash
+python demo.py
+```
+
+### Full Analysis
+```bash
+python simple_main.py
+```
+
+### Custom Analysis
+```python
+from stockaroo import StockDataCollector, StockDataPreprocessor, StockPredictor
+
+# Collect data
+collector = StockDataCollector("AAPL")
+data = collector.get_stock_data(period="1y", interval="1d")
+
+# Preprocess
+preprocessor = StockDataPreprocessor()
+processed_data = preprocessor.preprocess_pipeline(data)
+
+# Train model
+predictor = StockPredictor()
+predictor.train_model('linear_regression', processed_data['X_train'], processed_data['y_train'])
+results = predictor.evaluate_model('linear_regression', processed_data['X_test'], processed_data['y_test'])
+
+print(f"R² Score: {results['r2']:.4f}")
+```
+
+### CLI Commands
+```bash
+# Analyze a stock
+stockaroo analyze AAPL --period 2y --models linear_regression lasso
+
+# Launch web interface
+stockaroo ui --port 8501
+
+# Show version
+stockaroo version
+```

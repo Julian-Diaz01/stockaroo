@@ -1,0 +1,3 @@
+[console_scripts]
+stockaroo = stockaroo.cli:main
+stockaroo-ui = stockaroo.ui.streamlit_app:main
