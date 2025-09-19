@@ -5,13 +5,30 @@ Improved Stock Predictor with proper time series handling.
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression, Ridge, Lasso
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.model_selection import TimeSeriesSplit
+from sklearn.preprocessing import StandardScaler, RobustScaler
 import logging
 import pickle
 import os
 from datetime import datetime
+import warnings
+
+# Import gradient boosting models with fallback
+try:
+    import xgboost as xgb
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    XGBOOST_AVAILABLE = False
+    warnings.warn("XGBoost not available. Install with: pip install xgboost")
+
+try:
+    import lightgbm as lgb
+    LIGHTGBM_AVAILABLE = True
+except ImportError:
+    LIGHTGBM_AVAILABLE = False
+    warnings.warn("LightGBM not available. Install with: pip install lightgbm")
 
 logger = logging.getLogger(__name__)
 
@@ -26,17 +43,39 @@ class StockPredictor:
             'linear_regression': LinearRegression(),
             'ridge': Ridge(alpha=1.0),
             'lasso': Lasso(alpha=0.1),
-            'random_forest': RandomForestRegressor(n_estimators=100, random_state=42)
+            'random_forest': RandomForestRegressor(n_estimators=100, random_state=42),
+            'gradient_boosting': GradientBoostingRegressor(n_estimators=100, random_state=42)
         }
+        
+        # Add XGBoost if available
+        if XGBOOST_AVAILABLE:
+            self.models['xgboost'] = xgb.XGBRegressor(
+                n_estimators=100,
+                max_depth=6,
+                learning_rate=0.1,
+                random_state=42,
+                verbosity=0
+            )
+        
+        # Add LightGBM if available
+        if LIGHTGBM_AVAILABLE:
+            self.models['lightgbm'] = lgb.LGBMRegressor(
+                n_estimators=100,
+                max_depth=6,
+                learning_rate=0.1,
+                random_state=42,
+                verbosity=-1
+            )
         self.trained_models = {}
         self.model_scores = {}
         self.feature_names = None
-        self.scaler = None
+        self.scaler = RobustScaler()  # Use RobustScaler for better handling of outliers
         self.models_dir = "saved_models"
         os.makedirs(self.models_dir, exist_ok=True)
         
     def prepare_time_series_data(self, data: pd.DataFrame, target_col: str = 'Close', 
-                                lookback_window: int = 10, prediction_horizon: int = 1) -> tuple:
+                                lookback_window: int = 10, prediction_horizon: int = 1,
+                                earnings_data: dict = None) -> tuple:
         """
         Prepare data for time series prediction with proper feature engineering.
         
@@ -45,6 +84,7 @@ class StockPredictor:
             target_col: Target column
             lookback_window: Number of past days to use as features
             prediction_horizon: Days ahead to predict
+            earnings_data: Dictionary containing earnings data and impact analysis
             
         Returns:
             X, y: Features and targets
@@ -54,6 +94,9 @@ class StockPredictor:
         # Create features using only past information
         features = []
         targets = []
+        
+        # Prepare earnings features if available
+        earnings_features = self._prepare_earnings_features(df, earnings_data)
         
         for i in range(lookback_window, len(df) - prediction_horizon + 1):
             # Features: past lookback_window days
@@ -70,16 +113,46 @@ class StockPredictor:
                     df.iloc[idx]['Volume']
                 ])
             
-            # Technical indicators (calculated from past data only)
+            # Enhanced technical indicators (calculated from past data only)
             if i >= 20:  # Ensure we have enough data for indicators
                 # Simple moving averages
                 ma_5 = df.iloc[i-5:i]['Close'].mean()
                 ma_10 = df.iloc[i-10:i]['Close'].mean()
                 ma_20 = df.iloc[i-20:i]['Close'].mean()
                 
-                # Price momentum
+                # Exponential moving averages (more responsive to recent changes)
+                ema_5 = df.iloc[i-5:i]['Close'].ewm(span=5).mean().iloc[-1]
+                ema_10 = df.iloc[i-10:i]['Close'].ewm(span=10).mean().iloc[-1]
+                
+                # Price momentum and returns
                 momentum_5 = (df.iloc[i-1]['Close'] / df.iloc[i-6]['Close'] - 1) if i >= 6 else 0
                 momentum_10 = (df.iloc[i-1]['Close'] / df.iloc[i-11]['Close'] - 1) if i >= 11 else 0
+                momentum_20 = (df.iloc[i-1]['Close'] / df.iloc[i-21]['Close'] - 1) if i >= 21 else 0
+                
+                # Volatility measures
+                returns_5 = df.iloc[i-5:i]['Close'].pct_change().dropna()
+                volatility_5 = returns_5.std() if len(returns_5) > 1 else 0
+                
+                returns_10 = df.iloc[i-10:i]['Close'].pct_change().dropna()
+                volatility_10 = returns_10.std() if len(returns_10) > 1 else 0
+                
+                # Price position relative to moving averages
+                price_vs_ma5 = (df.iloc[i-1]['Close'] / ma_5 - 1) if ma_5 > 0 else 0
+                price_vs_ma10 = (df.iloc[i-1]['Close'] / ma_10 - 1) if ma_10 > 0 else 0
+                price_vs_ma20 = (df.iloc[i-1]['Close'] / ma_20 - 1) if ma_20 > 0 else 0
+                
+                # Volume indicators
+                volume_ma_5 = df.iloc[i-5:i]['Volume'].mean()
+                volume_ratio = df.iloc[i-1]['Volume'] / volume_ma_5 if volume_ma_5 > 0 else 1
+                
+                # High-Low spread
+                high_low_spread = (df.iloc[i-1]['High'] - df.iloc[i-1]['Low']) / df.iloc[i-1]['Close']
+                
+                # RSI-like momentum indicator
+                gains = df.iloc[i-14:i]['Close'].diff().clip(lower=0).mean() if i >= 14 else 0
+                losses = -df.iloc[i-14:i]['Close'].diff().clip(upper=0).mean() if i >= 14 else 0
+                rs = gains / losses if losses > 0 else 0
+                rsi = 100 - (100 / (1 + rs)) if rs > 0 else 50
                 
                 # Volatility (rolling std of returns)
                 if i >= 10:
@@ -88,10 +161,21 @@ class StockPredictor:
                 else:
                     volatility = 0
                 
-                feature_row.extend([ma_5, ma_10, ma_20, momentum_5, momentum_10, volatility])
+                feature_row.extend([
+                    ma_5, ma_10, ma_20, ema_5, ema_10,
+                    momentum_5, momentum_10, momentum_20,
+                    volatility_5, volatility_10,
+                    price_vs_ma5, price_vs_ma10, price_vs_ma20,
+                    volume_ratio, high_low_spread, rsi
+                ])
             else:
                 # Pad with zeros if not enough data
-                feature_row.extend([0, 0, 0, 0, 0, 0])
+                feature_row.extend([0] * 16)  # 16 new features
+            
+            # Add earnings features for this date
+            current_date = df.index[i]
+            earnings_feature_row = self._get_earnings_features_for_date(current_date, earnings_features)
+            feature_row.extend(earnings_feature_row)
             
             features.append(feature_row)
             
@@ -99,32 +183,152 @@ class StockPredictor:
             target = df.iloc[i + prediction_horizon - 1][target_col]
             targets.append(target)
         
-        return np.array(features), np.array(targets)
+        X = np.array(features)
+        y = np.array(targets)
+        
+        # Handle NaN values
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        return X, y
+    
+    def _prepare_earnings_features(self, df: pd.DataFrame, earnings_data: dict) -> dict:
+        """
+        Prepare earnings features for the dataset.
+        
+        Args:
+            df: Stock price data
+            earnings_data: Dictionary containing earnings data
+            
+        Returns:
+            dict: Processed earnings features
+        """
+        earnings_features = {
+            'impact_analysis': None,
+            'upcoming_earnings': None,
+            'earnings_surprise_history': []
+        }
+        
+        if earnings_data is None:
+            return earnings_features
+        
+        # Process earnings impact analysis if available
+        if 'impact_analysis' in earnings_data and not earnings_data['impact_analysis'].empty:
+            earnings_features['impact_analysis'] = earnings_data['impact_analysis']
+        
+        # Process upcoming earnings from calendar
+        if 'calendar' in earnings_data and not earnings_data['calendar'].empty:
+            earnings_features['upcoming_earnings'] = earnings_data['calendar']
+        
+        # Process earnings surprise history
+        if 'history' in earnings_data and not earnings_data['history'].empty:
+            history = earnings_data['history']
+            for idx, row in history.iterrows():
+                if 'Actual' in row and 'Estimate' in row:
+                    if pd.notna(row['Actual']) and pd.notna(row['Estimate']) and row['Estimate'] != 0:
+                        surprise = ((row['Actual'] - row['Estimate']) / abs(row['Estimate'])) * 100
+                        earnings_features['earnings_surprise_history'].append({
+                            'date': idx,
+                            'surprise_pct': surprise,
+                            'actual': row['Actual'],
+                            'estimate': row['Estimate']
+                        })
+        
+        return earnings_features
+    
+    def _get_earnings_features_for_date(self, current_date: pd.Timestamp, earnings_features: dict) -> list:
+        """
+        Get earnings features for a specific date.
+        
+        Args:
+            current_date: Current date in the time series
+            earnings_features: Processed earnings features
+            
+        Returns:
+            list: Earnings features for the current date
+        """
+        feature_row = []
+        
+        # Days since last earnings announcement
+        days_since_earnings = 0
+        last_earnings_surprise = 0.0
+        last_earnings_impact = 0.0
+        
+        if earnings_features['impact_analysis'] is not None:
+            impact_df = earnings_features['impact_analysis']
+            # Find the most recent earnings before current_date
+            past_earnings = impact_df[impact_df['earnings_date'] < current_date]
+            if not past_earnings.empty:
+                last_earnings = past_earnings.iloc[-1]
+                days_since_earnings = (current_date - last_earnings['earnings_date']).days
+                last_earnings_surprise = last_earnings.get('earnings_surprise_pct', 0.0) or 0.0
+                last_earnings_impact = last_earnings.get('price_change_pct', 0.0) or 0.0
+        
+        # Days until next earnings announcement
+        days_until_earnings = 365  # Default to 1 year if no upcoming earnings
+        if earnings_features['upcoming_earnings'] is not None:
+            upcoming = earnings_features['upcoming_earnings']
+            future_earnings = upcoming[upcoming.index > current_date]
+            if not future_earnings.empty:
+                next_earnings = future_earnings.iloc[0]
+                days_until_earnings = (next_earnings.name - current_date).days
+        
+        # Average earnings surprise over last 4 quarters
+        avg_earnings_surprise = 0.0
+        if earnings_features['earnings_surprise_history']:
+            recent_surprises = [
+                s['surprise_pct'] for s in earnings_features['earnings_surprise_history']
+                if s['date'] < current_date
+            ][-4:]  # Last 4 quarters
+            if recent_surprises:
+                avg_earnings_surprise = np.mean(recent_surprises)
+        
+        # Earnings volatility (std of recent surprises)
+        earnings_volatility = 0.0
+        if earnings_features['earnings_surprise_history']:
+            recent_surprises = [
+                s['surprise_pct'] for s in earnings_features['earnings_surprise_history']
+                if s['date'] < current_date
+            ][-8:]  # Last 8 quarters
+            if len(recent_surprises) > 1:
+                earnings_volatility = np.std(recent_surprises)
+        
+        feature_row.extend([
+            days_since_earnings,
+            days_until_earnings,
+            last_earnings_surprise,
+            last_earnings_impact,
+            avg_earnings_surprise,
+            earnings_volatility
+        ])
+        
+        return feature_row
     
     def train_model(self, model_name: str, X_train: np.ndarray, y_train: np.ndarray) -> dict:
-        """Train a specific model."""
+        """Train a specific model with feature scaling."""
         if model_name not in self.models:
             raise ValueError(f"Model {model_name} not available")
         
         logger.info(f"Training {model_name} model")
         
-        # Create a fresh model instance to avoid conflicts
-        if model_name == 'linear_regression':
-            model = LinearRegression()
-        elif model_name == 'ridge':
-            model = Ridge(alpha=1.0)
-        elif model_name == 'lasso':
-            model = Lasso(alpha=0.1)
-        elif model_name == 'random_forest':
-            model = RandomForestRegressor(n_estimators=100, random_state=42)
+        # Scale features for models that benefit from it
+        models_need_scaling = ['linear_regression', 'ridge', 'lasso', 'xgboost', 'lightgbm']
+        if model_name in models_need_scaling:
+            X_train_scaled = self.scaler.fit_transform(X_train)
+        else:
+            X_train_scaled = X_train
         
-        model.fit(X_train, y_train)
+        # Get the model from the models dictionary
+        model = self.models[model_name]
+        
+        # Train the model
+        model.fit(X_train_scaled, y_train)
         
         # Store trained model
         self.trained_models[model_name] = model
         
         # Calculate training score
-        train_score = model.score(X_train, y_train)
+        train_score = model.score(X_train_scaled, y_train)
         
         logger.info(f"{model_name} training completed. R² score: {train_score:.4f}")
         
@@ -141,8 +345,15 @@ class StockPredictor:
         
         model = self.trained_models[model_name]
         
+        # Scale test features if the model was trained with scaling
+        models_need_scaling = ['linear_regression', 'ridge', 'lasso', 'xgboost', 'lightgbm']
+        if model_name in models_need_scaling:
+            X_test_scaled = self.scaler.transform(X_test)
+        else:
+            X_test_scaled = X_test
+        
         # Make predictions
-        y_pred = model.predict(X_test)
+        y_pred = model.predict(X_test_scaled)
         
         # Calculate metrics
         mse = mean_squared_error(y_test, y_pred)
@@ -172,7 +383,7 @@ class StockPredictor:
         return metrics
     
     def predict_next_day(self, model_name: str, recent_data: pd.DataFrame, 
-                        lookback_window: int = 10) -> float:
+                        lookback_window: int = 10, earnings_data: dict = None) -> float:
         """
         Predict the next day's price using the most recent data.
         
@@ -180,6 +391,7 @@ class StockPredictor:
             model_name: Name of the trained model
             recent_data: Recent stock data (last lookback_window + 20 days)
             lookback_window: Number of past days to use as features
+            earnings_data: Dictionary containing earnings data
             
         Returns:
             Predicted price for the next day
@@ -189,6 +401,8 @@ class StockPredictor:
         
         model = self.trained_models[model_name]
         
+        # Prepare earnings features if available
+        earnings_features = self._prepare_earnings_features(recent_data, earnings_data)
         
         # Prepare features from recent data
         feature_row = []
@@ -204,31 +418,79 @@ class StockPredictor:
                 recent_data.iloc[idx]['Volume']
             ])
         
-        # Technical indicators
+        # Enhanced technical indicators (same as in prepare_time_series_data)
         if len(recent_data) >= 20:
             # Simple moving averages
             ma_5 = recent_data.iloc[-5:]['Close'].mean()
             ma_10 = recent_data.iloc[-10:]['Close'].mean()
             ma_20 = recent_data.iloc[-20:]['Close'].mean()
             
-            # Price momentum
+            # Exponential moving averages
+            ema_5 = recent_data.iloc[-5:]['Close'].ewm(span=5).mean().iloc[-1]
+            ema_10 = recent_data.iloc[-10:]['Close'].ewm(span=10).mean().iloc[-1]
+            
+            # Price momentum and returns
             momentum_5 = (recent_data.iloc[-1]['Close'] / recent_data.iloc[-6]['Close'] - 1) if len(recent_data) >= 6 else 0
             momentum_10 = (recent_data.iloc[-1]['Close'] / recent_data.iloc[-11]['Close'] - 1) if len(recent_data) >= 11 else 0
+            momentum_20 = (recent_data.iloc[-1]['Close'] / recent_data.iloc[-21]['Close'] - 1) if len(recent_data) >= 21 else 0
             
-            # Volatility
-            if len(recent_data) >= 10:
-                returns = recent_data.iloc[-10:]['Close'].pct_change().dropna()
-                volatility = returns.std() if len(returns) > 1 else 0
+            # Volatility measures
+            returns_5 = recent_data.iloc[-5:]['Close'].pct_change().dropna()
+            volatility_5 = returns_5.std() if len(returns_5) > 1 else 0
+            
+            returns_10 = recent_data.iloc[-10:]['Close'].pct_change().dropna()
+            volatility_10 = returns_10.std() if len(returns_10) > 1 else 0
+            
+            # Price position relative to moving averages
+            price_vs_ma5 = (recent_data.iloc[-1]['Close'] / ma_5 - 1) if ma_5 > 0 else 0
+            price_vs_ma10 = (recent_data.iloc[-1]['Close'] / ma_10 - 1) if ma_10 > 0 else 0
+            price_vs_ma20 = (recent_data.iloc[-1]['Close'] / ma_20 - 1) if ma_20 > 0 else 0
+            
+            # Volume indicators
+            volume_ma_5 = recent_data.iloc[-5:]['Volume'].mean()
+            volume_ratio = recent_data.iloc[-1]['Volume'] / volume_ma_5 if volume_ma_5 > 0 else 1
+            
+            # High-Low spread
+            high_low_spread = (recent_data.iloc[-1]['High'] - recent_data.iloc[-1]['Low']) / recent_data.iloc[-1]['Close']
+            
+            # RSI-like momentum indicator
+            if len(recent_data) >= 14:
+                gains = recent_data.iloc[-14:]['Close'].diff().clip(lower=0).mean()
+                losses = -recent_data.iloc[-14:]['Close'].diff().clip(upper=0).mean()
+                rs = gains / losses if losses > 0 else 0
+                rsi = 100 - (100 / (1 + rs)) if rs > 0 else 50
             else:
-                volatility = 0
+                rsi = 50
                 
-            feature_row.extend([ma_5, ma_10, ma_20, momentum_5, momentum_10, volatility])
+            feature_row.extend([
+                ma_5, ma_10, ma_20, ema_5, ema_10,
+                momentum_5, momentum_10, momentum_20,
+                volatility_5, volatility_10,
+                price_vs_ma5, price_vs_ma10, price_vs_ma20,
+                volume_ratio, high_low_spread, rsi
+            ])
         else:
-            feature_row.extend([0, 0, 0, 0, 0, 0])
+            feature_row.extend([0] * 16)  # 16 new features
+        
+        # Add earnings features for current date
+        current_date = recent_data.index[-1]
+        earnings_feature_row = self._get_earnings_features_for_date(current_date, earnings_features)
+        feature_row.extend(earnings_feature_row)
         
         # Make prediction
         features = np.array([feature_row])
-        prediction = model.predict(features)[0]
+        
+        # Handle NaN values
+        features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # Scale features if the model was trained with scaling
+        models_need_scaling = ['linear_regression', 'ridge', 'lasso', 'xgboost', 'lightgbm']
+        if model_name in models_need_scaling:
+            features_scaled = self.scaler.transform(features)
+        else:
+            features_scaled = features
+            
+        prediction = model.predict(features_scaled)[0]
         
         # Apply reasonable constraints
         current_price = recent_data.iloc[-1]['Close']
@@ -318,52 +580,243 @@ class StockPredictor:
         
         return sorted(model_files, key=lambda x: x['timestamp'], reverse=True)
     
-    def time_series_split(self, X: np.ndarray, y: np.ndarray, test_size: float = 0.2) -> tuple:
+    def time_series_split(self, X: np.ndarray, y: np.ndarray, test_size: float = 0.2, 
+                         embargo_period: int = 0) -> tuple:
         """
-        Split data using time series split (no random shuffling).
+        Split data using time series split with embargo period to prevent data leakage.
+        
+        Args:
+            X: Feature matrix
+            y: Target vector
+            test_size: Fraction of data to use for testing
+            embargo_period: Number of samples to skip between train and test sets
+            
+        Returns:
+            X_train, X_test, y_train, y_test: Split data with embargo period
         """
-        split_idx = int(len(X) * (1 - test_size))
+        total_samples = len(X)
+        test_samples = int(total_samples * test_size)
+        train_samples = total_samples - test_samples - embargo_period
         
-        X_train = X[:split_idx]
-        X_test = X[split_idx:]
-        y_train = y[:split_idx]
-        y_test = y[split_idx:]
+        # Ensure we have enough data after applying embargo
+        if train_samples <= 0 or test_samples <= 0:
+            raise ValueError(f"Not enough data for split with embargo. "
+                           f"Total: {total_samples}, Train: {train_samples}, "
+                           f"Test: {test_samples}, Embargo: {embargo_period}")
         
-        logger.info(f"Time series split: {len(X_train)} training, {len(X_test)} test samples")
+        # Split with embargo period
+        X_train = X[:train_samples]
+        X_test = X[train_samples + embargo_period:]
+        y_train = y[:train_samples]
+        y_test = y[train_samples + embargo_period:]
+        
+        logger.info(f"Time series split with embargo: {len(X_train)} training, "
+                   f"{len(X_test)} test samples, {embargo_period} embargo samples")
         
         return X_train, X_test, y_train, y_test
+    
+    def time_series_split_with_validation(self, X: np.ndarray, y: np.ndarray, 
+                                        train_size: float = 0.6, val_size: float = 0.2,
+                                        embargo_period: int = 5) -> tuple:
+        """
+        Split data into train/validation/test sets with embargo periods to prevent data leakage.
+        
+        Args:
+            X: Feature matrix
+            y: Target vector
+            train_size: Fraction of data to use for training
+            val_size: Fraction of data to use for validation
+            embargo_period: Number of samples to skip between each set
+            
+        Returns:
+            X_train, X_val, X_test, y_train, y_val, y_test: Split data with embargo periods
+        """
+        total_samples = len(X)
+        train_samples = int(total_samples * train_size)
+        val_samples = int(total_samples * val_size)
+        test_samples = total_samples - train_samples - val_samples - (2 * embargo_period)
+        
+        # Ensure we have enough data after applying embargo periods
+        if train_samples <= 0 or val_samples <= 0 or test_samples <= 0:
+            raise ValueError(f"Not enough data for split with embargo. "
+                           f"Total: {total_samples}, Train: {train_samples}, "
+                           f"Val: {val_samples}, Test: {test_samples}, "
+                           f"Embargo: {embargo_period}")
+        
+        # Calculate split indices with embargo periods
+        train_end = train_samples
+        val_start = train_end + embargo_period
+        val_end = val_start + val_samples
+        test_start = val_end + embargo_period
+        
+        # Split data
+        X_train = X[:train_end]
+        X_val = X[val_start:val_end]
+        X_test = X[test_start:]
+        y_train = y[:train_end]
+        y_val = y[val_start:val_end]
+        y_test = y[test_start:]
+        
+        logger.info(f"Time series split with validation and embargo:")
+        logger.info(f"  Train: {len(X_train)} samples (0 to {train_end-1})")
+        logger.info(f"  Embargo: {embargo_period} samples ({train_end} to {val_start-1})")
+        logger.info(f"  Validation: {len(X_val)} samples ({val_start} to {val_end-1})")
+        logger.info(f"  Embargo: {embargo_period} samples ({val_end} to {test_start-1})")
+        logger.info(f"  Test: {len(X_test)} samples ({test_start} to {total_samples-1})")
+        
+        return X_train, X_val, X_test, y_train, y_val, y_test
+    
+    def validate_no_data_leakage(self, X_train: np.ndarray, X_test: np.ndarray, 
+                                y_train: np.ndarray, y_test: np.ndarray) -> bool:
+        """
+        Validate that there's no data leakage between train and test sets.
+        
+        Args:
+            X_train, X_test: Training and test feature matrices
+            y_train, y_test: Training and test target vectors
+            
+        Returns:
+            True if no leakage detected, False otherwise
+        """
+        # Check for overlapping samples by comparing feature vectors
+        leakage_detected = False
+        
+        for i, train_sample in enumerate(X_train):
+            for j, test_sample in enumerate(X_test):
+                if np.array_equal(train_sample, test_sample):
+                    logger.warning(f"Data leakage detected: Train sample {i} matches test sample {j}")
+                    leakage_detected = True
+        
+        # Check for overlapping targets
+        for i, train_target in enumerate(y_train):
+            for j, test_target in enumerate(y_test):
+                if np.array_equal(train_target, test_target):
+                    logger.warning(f"Target leakage detected: Train target {i} matches test target {j}")
+                    leakage_detected = True
+        
+        if not leakage_detected:
+            logger.info("No data leakage detected between train and test sets")
+        
+        return not leakage_detected
+    
+    def get_split_info(self, X_train: np.ndarray, X_test: np.ndarray, 
+                      y_train: np.ndarray, y_test: np.ndarray) -> dict:
+        """
+        Get information about the data split for debugging and validation.
+        
+        Returns:
+            Dictionary with split information
+        """
+        return {
+            'train_samples': len(X_train),
+            'test_samples': len(X_test),
+            'total_samples': len(X_train) + len(X_test),
+            'train_ratio': len(X_train) / (len(X_train) + len(X_test)),
+            'test_ratio': len(X_test) / (len(X_train) + len(X_test)),
+            'feature_dimensions': X_train.shape[1] if len(X_train) > 0 else 0,
+            'no_leakage': self.validate_no_data_leakage(X_train, X_test, y_train, y_test)
+        }
 
 def demonstrate_prediction():
-    """Demonstrate the improved prediction system."""
+    """Demonstrate the improved prediction system with data leakage prevention and earnings integration."""
     from stockaroo.data.collector import StockDataCollector
     
     # Collect data
     collector = StockDataCollector("AAPL")
     data = collector.get_stock_data(period="1y", interval="1d")
     
-    # Prepare data
-    predictor = StockPredictor()
-    X, y = predictor.prepare_time_series_data(data, lookback_window=10, prediction_horizon=1)
+    # Collect earnings data
+    earnings_data = collector.get_earnings_data()
+    earnings_impact = collector.get_earnings_impact_analysis(data, earnings_data)
     
-    # Split data
-    X_train, X_test, y_train, y_test = predictor.time_series_split(X, y, test_size=0.2)
+    # Combine earnings data
+    combined_earnings_data = {
+        **earnings_data,
+        'impact_analysis': earnings_impact
+    }
+    
+    # Prepare data with earnings features
+    predictor = StockPredictor()
+    X, y = predictor.prepare_time_series_data(
+        data, 
+        lookback_window=10, 
+        prediction_horizon=1,
+        earnings_data=combined_earnings_data
+    )
+    
+    print(f"Total samples prepared: {len(X)}")
+    
+    # Split data with embargo period to prevent data leakage
+    embargo_period = 5  # Skip 5 samples between train and test
+    X_train, X_test, y_train, y_test = predictor.time_series_split(
+        X, y, test_size=0.2, embargo_period=embargo_period
+    )
+    
+    # Validate no data leakage
+    split_info = predictor.get_split_info(X_train, X_test, y_train, y_test)
+    print(f"\nSplit Information:")
+    print(f"  Train samples: {split_info['train_samples']}")
+    print(f"  Test samples: {split_info['test_samples']}")
+    print(f"  Train ratio: {split_info['train_ratio']:.2%}")
+    print(f"  Test ratio: {split_info['test_ratio']:.2%}")
+    print(f"  No data leakage: {split_info['no_leakage']}")
     
     # Train and evaluate
     predictor.train_model('linear_regression', X_train, y_train)
     results = predictor.evaluate_model('linear_regression', X_test, y_test)
     
-    print(f"R² Score: {results['r2']:.4f}")
-    print(f"RMSE: ${results['rmse']:.2f}")
-    print(f"MAPE: {results['mape']:.2f}%")
+    print(f"\nModel Performance:")
+    print(f"  R² Score: {results['r2']:.4f}")
+    print(f"  RMSE: ${results['rmse']:.2f}")
+    print(f"  MAPE: {results['mape']:.2f}%")
     
-    # Predict next day
+    # Demonstrate train/validation/test split with embargo
+    print(f"\n--- Demonstrating Train/Validation/Test Split with Embargo ---")
+    X_train_val, X_val, X_test_val, y_train_val, y_val, y_test_val = predictor.time_series_split_with_validation(
+        X, y, train_size=0.6, val_size=0.2, embargo_period=3
+    )
+    
+    # Train on training set
+    predictor.train_model('ridge', X_train_val, y_train_val)
+    
+    # Evaluate on validation set
+    val_results = predictor.evaluate_model('ridge', X_val, y_val)
+    print(f"Validation Performance:")
+    print(f"  R² Score: {val_results['r2']:.4f}")
+    print(f"  RMSE: ${val_results['rmse']:.2f}")
+    
+    # Final evaluation on test set
+    test_results = predictor.evaluate_model('ridge', X_test_val, y_test_val)
+    print(f"Test Performance:")
+    print(f"  R² Score: {test_results['r2']:.4f}")
+    print(f"  RMSE: ${test_results['rmse']:.2f}")
+    
+    # Predict next day with earnings data
     recent_data = data.tail(30)  # Use last 30 days
-    next_day_pred = predictor.predict_next_day('linear_regression', recent_data)
+    next_day_pred = predictor.predict_next_day(
+        'linear_regression', 
+        recent_data, 
+        lookback_window=10,
+        earnings_data=combined_earnings_data
+    )
     current_price = data.iloc[-1]['Close']
     
-    print(f"\nCurrent price: ${current_price:.2f}")
-    print(f"Predicted next day: ${next_day_pred:.2f}")
-    print(f"Expected change: {((next_day_pred - current_price) / current_price * 100):+.2f}%")
+    print(f"\nPrediction:")
+    print(f"  Current price: ${current_price:.2f}")
+    print(f"  Predicted next day: ${next_day_pred:.2f}")
+    print(f"  Expected change: {((next_day_pred - current_price) / current_price * 100):+.2f}%")
+    
+    # Display earnings information if available
+    if earnings_impact is not None and not earnings_impact.empty:
+        print(f"\nEarnings Analysis:")
+        print(f"  Total earnings events analyzed: {len(earnings_impact)}")
+        if len(earnings_impact) > 0:
+            avg_surprise = earnings_impact['earnings_surprise_pct'].mean()
+            avg_impact = earnings_impact['price_change_pct'].mean()
+            print(f"  Average earnings surprise: {avg_surprise:.2f}%")
+            print(f"  Average price impact: {avg_impact:.2f}%")
+    else:
+        print(f"\nEarnings Analysis: No earnings data available for analysis")
 
 if __name__ == "__main__":
     demonstrate_prediction()

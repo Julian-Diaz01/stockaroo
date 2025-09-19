@@ -15,9 +15,7 @@ warnings.filterwarnings('ignore')
 
 # Import our custom modules
 from stockaroo.data.collector import StockDataCollector
-from stockaroo.data.multi_market_collector import MultiMarketCollector
 from stockaroo.models.predictor import StockPredictor
-from stockaroo.models.cross_market_predictor import CrossMarketPredictor
 
 # Page configuration
 st.set_page_config(
@@ -72,8 +70,6 @@ def main():
     # Initialize session state
     if 'analysis_results' not in st.session_state:
         st.session_state.analysis_results = None
-    if 'cross_market_results' not in st.session_state:
-        st.session_state.cross_market_results = None
     
     # Header
     st.markdown('<h1 class="main-header">🌍 Advanced Stock Analytics Dashboard</h1>', unsafe_allow_html=True)
@@ -82,14 +78,12 @@ def main():
     # Analysis type selection
     analysis_type = st.radio(
         "Select Analysis Type:",
-        ["Single Stock Analysis", "Cross-Market Analysis", "Model Management"],
+        ["Single Stock Analysis", "Model Management"],
         horizontal=True
     )
     
     if analysis_type == "Single Stock Analysis":
         single_stock_analysis()
-    elif analysis_type == "Cross-Market Analysis":
-        cross_market_analysis()
     elif analysis_type == "Model Management":
         model_management()
 
@@ -192,90 +186,6 @@ def single_stock_analysis():
     if st.session_state.analysis_results:
         display_single_stock_results(st.session_state.analysis_results)
 
-def cross_market_analysis():
-    """Cross-market analysis interface."""
-    st.header("🌍 Cross-Market Analysis")
-    
-    # Show info about cross-market analysis
-    st.markdown("""
-    <div class="info-message">
-        <strong>Cross-Market Analysis:</strong> Uses Hong Kong (Hang Seng), European (STOXX 600), and American (S&P 500) indices to predict US market movements with accumulation/distribution analysis.
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Sidebar for parameters
-    with st.sidebar:
-        st.subheader("⚙️ Cross-Market Configuration")
-        
-        # Period selection
-        period_options = {
-            "3 Months": "3mo", 
-            "6 Months": "6mo",
-            "1 Year": "1y",
-            "2 Years": "2y"
-        }
-        period = st.selectbox("Data Period", list(period_options.keys()))
-        period_value = period_options[period]
-        
-        # Model selection
-        st.subheader("🤖 Model Selection")
-        models_to_use = st.multiselect(
-            "Select Models to Compare",
-            ["Linear Regression", "Ridge", "Lasso", "Random Forest"],
-            default=["Linear Regression", "Ridge", "Lasso"]
-        )
-        
-        # Lookback window
-        lookback_window = st.slider(
-            "Lookback Window (days)", 
-            min_value=1, 
-            max_value=5, 
-            value=2,
-            help="Number of past days to use as features"
-        )
-        
-        # Test size
-        test_size = st.slider(
-            "Test Set Size (%)", 
-            min_value=10, 
-            max_value=40, 
-            value=20,
-            help="Percentage of data to use for testing"
-        ) / 100
-        
-        # Run analysis button
-        run_cross_market_btn = st.button("🌍 Run Cross-Market Analysis", type="primary", use_container_width=True)
-        
-        # Clear results button
-        if st.session_state.cross_market_results:
-            if st.button("🗑️ Clear Cross-Market Results", use_container_width=True):
-                st.session_state.cross_market_results = None
-                st.rerun()
-    
-    # Main content area
-    if run_cross_market_btn:
-        # Run cross-market analysis
-        with st.spinner("Running cross-market analysis..."):
-            try:
-                results = run_cross_market_analysis(
-                    period_value, models_to_use, lookback_window, test_size
-                )
-                st.session_state.cross_market_results = results
-                
-                # Success message
-                st.markdown("""
-                <div class="success-message">
-                    ✅ Cross-market analysis completed successfully!
-                </div>
-                """, unsafe_allow_html=True)
-                
-            except Exception as e:
-                st.error(f"Error during cross-market analysis: {str(e)}")
-                return
-    
-    # Display results if available
-    if st.session_state.cross_market_results:
-        display_cross_market_results(st.session_state.cross_market_results)
 
 def model_management():
     """Model management interface."""
@@ -309,14 +219,6 @@ def model_management():
     except Exception as e:
         st.error(f"Error loading single stock models: {e}")
     
-    # Cross-market models
-    st.write("**Cross-Market Models:**")
-    try:
-        cross_predictor = CrossMarketPredictor()
-        # Note: CrossMarketPredictor doesn't have list_saved_models method yet
-        st.info("Cross-market model listing not implemented yet.")
-    except Exception as e:
-        st.error(f"Error loading cross-market models: {e}")
     
     # Model performance comparison
     st.subheader("📊 Model Performance Comparison")
@@ -418,68 +320,6 @@ def run_single_stock_analysis(symbol, period, interval, models_to_use, lookback_
         'lookback_window': lookback_window
     }
 
-def run_cross_market_analysis(period, models_to_use, lookback_window, test_size):
-    """Run cross-market analysis."""
-    # Initialize cross-market predictor
-    predictor = CrossMarketPredictor()
-    
-    # Prepare data
-    X, y, full_data = predictor.prepare_cross_market_data(period=period, lookback_window=lookback_window)
-    
-    # Split data
-    X_train, X_test, y_train, y_test = predictor.time_series_split(X, y, test_size)
-    
-    # Train and evaluate models
-    model_mapping = {
-        "Linear Regression": "linear_regression",
-        "Ridge": "ridge", 
-        "Lasso": "lasso",
-        "Random Forest": "random_forest"
-    }
-    
-    selected_models = [model_mapping[model] for model in models_to_use if model in model_mapping]
-    
-    eval_results = {}
-    for model_name in selected_models:
-        try:
-            predictor.train_model(model_name, X_train, y_train)
-            eval_results[model_name] = predictor.evaluate_model(
-                model_name, X_test, y_test
-            )
-        except Exception as e:
-            st.warning(f"Error with {model_name}: {str(e)}")
-    
-    # Get best model
-    best_model = max(eval_results.keys(), key=lambda x: eval_results[x]['r2']) if eval_results else None
-    
-    # Next day prediction
-    next_day_pred = None
-    if best_model:
-        try:
-            next_day_pred = predictor.predict_next_day(best_model, lookback_window)
-        except Exception as e:
-            st.warning(f"Could not make next day prediction: {e}")
-    
-    # A/D Analysis
-    ad_analysis = None
-    try:
-        ad_analysis = predictor.analyze_accumulation_distribution()
-    except Exception as e:
-        st.warning(f"Could not perform A/D analysis: {e}")
-    
-    return {
-        'X_train': X_train,
-        'X_test': X_test,
-        'y_train': y_train,
-        'y_test': y_test,
-        'full_data': full_data,
-        'eval_results': eval_results,
-        'best_model': best_model,
-        'next_day_pred': next_day_pred,
-        'ad_analysis': ad_analysis,
-        'period': period,
-        'lookback_window': lookback_window
-    }
 
 def display_single_stock_results(results):
     """Display single stock analysis results."""
@@ -513,67 +353,6 @@ def display_single_stock_results(results):
         st.header("🔮 Next Day Prediction")
         display_next_day_prediction(results)
 
-def display_cross_market_results(results):
-    """Display cross-market analysis results."""
-    # Market overview
-    st.header("🌍 Market Overview")
-    
-    # Get market data for display
-    collector = MultiMarketCollector()
-    market_data = collector.get_all_markets_data(period=results['period'])
-    
-    # Display market indices
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if 'hong_kong' in market_data:
-            hk_data = market_data['hong_kong']
-            current_price = hk_data.iloc[-1]['Close']
-            prev_price = hk_data.iloc[-2]['Close'] if len(hk_data) > 1 else current_price
-            change = ((current_price - prev_price) / prev_price) * 100
-            st.metric("Hong Kong (Hang Seng)", f"{current_price:.2f}", f"{change:+.2f}%")
-    
-    with col2:
-        if 'europe' in market_data:
-            eu_data = market_data['europe']
-            current_price = eu_data.iloc[-1]['Close']
-            prev_price = eu_data.iloc[-2]['Close'] if len(eu_data) > 1 else current_price
-            change = ((current_price - prev_price) / prev_price) * 100
-            st.metric("Europe (STOXX 600)", f"{current_price:.2f}", f"{change:+.2f}%")
-    
-    with col3:
-        if 'america' in market_data:
-            us_data = market_data['america']
-            current_price = us_data.iloc[-1]['Close']
-            prev_price = us_data.iloc[-2]['Close'] if len(us_data) > 1 else current_price
-            change = ((current_price - prev_price) / prev_price) * 100
-            st.metric("America (S&P 500)", f"{current_price:.2f}", f"{change:+.2f}%")
-    
-    # Cross-market performance
-    st.header("🤖 Cross-Market Model Performance")
-    display_model_performance(results['eval_results'], results['best_model'])
-    
-    # Predictions vs Actual
-    st.header("🎯 Cross-Market Predictions vs Actual")
-    display_cross_market_predictions_comparison(results)
-    
-    # Next day prediction
-    if results['next_day_pred'] is not None:
-        st.header("🔮 Next Day US Market Prediction")
-        display_cross_market_next_day_prediction(results)
-    
-    # Accumulation/Distribution Analysis
-    if results['ad_analysis']:
-        st.header("📈 Accumulation/Distribution Analysis")
-        display_ad_analysis(results['ad_analysis'])
-    
-    # Cross-market correlations
-    st.header("🔗 Cross-Market Correlations")
-    display_cross_market_correlations(results['full_data'])
-    
-    # Cross-market indices chart with prediction
-    st.header("📊 Cross-Market Indices with Prediction")
-    display_cross_market_indices_chart(results)
 
 def create_price_chart(data, symbol):
     """Create interactive price chart."""
@@ -700,59 +479,6 @@ def display_predictions_comparison(results):
     fig.update_layout(height=500)
     st.plotly_chart(fig, use_container_width=True)
 
-def display_cross_market_predictions_comparison(results):
-    """Display cross-market predictions vs actual values."""
-    if not results['eval_results'] or not results['best_model']:
-        st.warning("No prediction results available.")
-        return
-    
-    best_model_results = results['eval_results'][results['best_model']]
-    y_test = results['y_test']
-    y_pred = best_model_results['predictions']
-    
-    # Create comparison dataframe
-    comparison_data = pd.DataFrame({
-        'Actual': y_test,
-        'Predicted': y_pred,
-        'Error': np.abs(y_test - y_pred),
-        'Error %': (np.abs(y_test - y_pred) / y_test) * 100
-    })
-    
-    # Display last 20 predictions
-    st.subheader(f"Last 20 Cross-Market Predictions ({results['best_model'].replace('_', ' ').title()})")
-    st.dataframe(
-        comparison_data.tail(20).style.format({
-            'Actual': '{:.2f}',
-            'Predicted': '{:.2f}',
-            'Error': '{:.2f}',
-            'Error %': '{:.1f}%'
-        }),
-        use_container_width=True
-    )
-    
-    # Scatter plot
-    fig = px.scatter(
-        comparison_data,
-        x='Actual',
-        y='Predicted',
-        title='Cross-Market Predictions vs Actual US Market Values',
-        color='Error %',
-        color_continuous_scale='reds'
-    )
-    
-    # Add perfect prediction line
-    min_val = min(comparison_data['Actual'].min(), comparison_data['Predicted'].min())
-    max_val = max(comparison_data['Actual'].max(), comparison_data['Predicted'].max())
-    fig.add_trace(go.Scatter(
-        x=[min_val, max_val],
-        y=[min_val, max_val],
-        mode='lines',
-        name='Perfect Prediction',
-        line=dict(dash='dash', color='black')
-    ))
-    
-    fig.update_layout(height=500)
-    st.plotly_chart(fig, use_container_width=True)
 
 def display_next_day_prediction(results):
     """Display realistic next day prediction."""
@@ -776,12 +502,8 @@ def display_next_day_prediction(results):
     </div>
     """, unsafe_allow_html=True)
 
-def display_cross_market_next_day_prediction(results):
-    """Display cross-market next day prediction."""
-    # Get current US market price
-    collector = MultiMarketCollector()
-    market_data = collector.get_all_markets_data(period="1mo")
-    if 'america' in market_data:
+if __name__ == "__main__":
+    main()
         current_price = market_data['america'].iloc[-1]['Close']
     else:
         current_price = 6500  # Default fallback

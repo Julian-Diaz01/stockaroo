@@ -106,6 +106,138 @@ class StockDataCollector:
             period=f"{days}d",
             interval="1d"
         )
+    
+    def get_earnings_data(self) -> dict:
+        """
+        Get earnings data including calendar, estimates, and actual results.
+        
+        Returns:
+            dict: Earnings data with calendar, estimates, and actual results
+        """
+        try:
+            earnings_data = {}
+            
+            # Get earnings calendar
+            try:
+                earnings_calendar = self.ticker.calendar
+                if earnings_calendar is not None and not earnings_calendar.empty:
+                    earnings_data['calendar'] = earnings_calendar
+                    logger.info(f"Retrieved earnings calendar for {self.symbol}")
+                else:
+                    logger.warning(f"No earnings calendar data available for {self.symbol}")
+            except Exception as e:
+                logger.warning(f"Could not fetch earnings calendar: {e}")
+            
+            # Get earnings history
+            try:
+                earnings_history = self.ticker.earnings_history
+                if earnings_history is not None and not earnings_history.empty:
+                    earnings_data['history'] = earnings_history
+                    logger.info(f"Retrieved earnings history for {self.symbol}")
+                else:
+                    logger.warning(f"No earnings history data available for {self.symbol}")
+            except Exception as e:
+                logger.warning(f"Could not fetch earnings history: {e}")
+            
+            # Get quarterly earnings
+            try:
+                quarterly_earnings = self.ticker.quarterly_earnings
+                if quarterly_earnings is not None and not quarterly_earnings.empty:
+                    earnings_data['quarterly'] = quarterly_earnings
+                    logger.info(f"Retrieved quarterly earnings for {self.symbol}")
+                else:
+                    logger.warning(f"No quarterly earnings data available for {self.symbol}")
+            except Exception as e:
+                logger.warning(f"Could not fetch quarterly earnings: {e}")
+            
+            # Get financials for additional earnings metrics
+            try:
+                financials = self.ticker.financials
+                if financials is not None and not financials.empty:
+                    earnings_data['financials'] = financials
+                    logger.info(f"Retrieved financials for {self.symbol}")
+            except Exception as e:
+                logger.warning(f"Could not fetch financials: {e}")
+            
+            return earnings_data
+            
+        except Exception as e:
+            logger.error(f"Error fetching earnings data for {self.symbol}: {str(e)}")
+            return {}
+    
+    def get_earnings_impact_analysis(self, stock_data: pd.DataFrame, earnings_data: dict) -> pd.DataFrame:
+        """
+        Analyze the impact of earnings announcements on stock prices.
+        
+        Args:
+            stock_data: Historical stock price data
+            earnings_data: Earnings data dictionary
+            
+        Returns:
+            pd.DataFrame: Analysis of earnings impact on stock prices
+        """
+        try:
+            impact_analysis = []
+            
+            if 'history' in earnings_data and not earnings_data['history'].empty:
+                earnings_history = earnings_data['history']
+                
+                for idx, row in earnings_history.iterrows():
+                    earnings_date = idx
+                    
+                    # Find stock price data around earnings date
+                    # Look for price data within 5 days of earnings announcement
+                    date_range = pd.date_range(
+                        start=earnings_date - timedelta(days=5),
+                        end=earnings_date + timedelta(days=5),
+                        freq='D'
+                    )
+                    
+                    # Get stock prices around earnings date
+                    pre_earnings_price = None
+                    post_earnings_price = None
+                    
+                    for check_date in date_range:
+                        if check_date in stock_data.index:
+                            if check_date < earnings_date and pre_earnings_price is None:
+                                pre_earnings_price = stock_data.loc[check_date, 'Close']
+                            elif check_date > earnings_date and post_earnings_price is None:
+                                post_earnings_price = stock_data.loc[check_date, 'Close']
+                    
+                    if pre_earnings_price and post_earnings_price:
+                        price_change = post_earnings_price - pre_earnings_price
+                        price_change_pct = (price_change / pre_earnings_price) * 100
+                        
+                        # Calculate earnings surprise if estimates are available
+                        earnings_surprise = None
+                        if 'Actual' in row and 'Estimate' in row:
+                            if pd.notna(row['Actual']) and pd.notna(row['Estimate']) and row['Estimate'] != 0:
+                                earnings_surprise = ((row['Actual'] - row['Estimate']) / abs(row['Estimate'])) * 100
+                        
+                        impact_analysis.append({
+                            'earnings_date': earnings_date,
+                            'actual_eps': row.get('Actual', None),
+                            'estimated_eps': row.get('Estimate', None),
+                            'earnings_surprise_pct': earnings_surprise,
+                            'pre_earnings_price': pre_earnings_price,
+                            'post_earnings_price': post_earnings_price,
+                            'price_change': price_change,
+                            'price_change_pct': price_change_pct,
+                            'volume': row.get('Volume', None)
+                        })
+            
+            if impact_analysis:
+                impact_df = pd.DataFrame(impact_analysis)
+                impact_df = impact_df.sort_values('earnings_date')
+                logger.info(f"Analyzed {len(impact_df)} earnings events for {self.symbol}")
+                return impact_df
+            else:
+                logger.warning(f"No earnings impact analysis possible for {self.symbol}")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            logger.error(f"Error analyzing earnings impact for {self.symbol}: {str(e)}")
+            return pd.DataFrame()
 
 def main():
     """
