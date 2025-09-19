@@ -147,6 +147,66 @@ def main():
             default=["Linear Regression", "Lasso", "Random Forest"]
         )
         
+        # Investment Calculator
+        st.subheader("💰 Investment Calculator")
+        
+        investment_amount = st.number_input(
+            "Investment Amount ($)", 
+            min_value=100, 
+            max_value=1000000, 
+            value=10000,
+            step=1000,
+            help="Amount you would invest in the stock"
+        )
+        
+        investment_days = st.number_input(
+            "Investment Period (days)", 
+            min_value=1, 
+            max_value=365, 
+            value=30,
+            help="Number of days to hold the investment"
+        )
+        
+        # Day Trading Strategy Options
+        st.subheader("📈 Day Trading Strategy")
+        
+        enable_day_trading = st.checkbox(
+            "Enable Day Trading Strategy",
+            value=False,
+            help="Add day trading strategy based on prediction confidence"
+        )
+        
+        if enable_day_trading:
+            max_holding_days = st.slider(
+                "Max Holding Period (days)",
+                min_value=1,
+                max_value=30,
+                value=5,
+                help="Maximum number of days to hold a position"
+            )
+            
+            prediction_threshold = st.slider(
+                "Prediction Confidence Threshold (%)",
+                min_value=0.1,
+                max_value=5.0,
+                value=1.0,
+                step=0.1,
+                help="Minimum predicted price change to trigger a trade"
+            )
+            
+            stop_loss_threshold = st.slider(
+                "Stop Loss Threshold (%)",
+                min_value=0.5,
+                max_value=10.0,
+                value=3.0,
+                step=0.5,
+                help="Maximum loss before selling position"
+            )
+        else:
+            max_holding_days = 1
+            prediction_threshold = 1.0
+            stop_loss_threshold = 3.0
+        
         # Analysis parameters
         st.subheader("🔧 Analysis Parameters")
         lookback_window = st.slider("Lookback Window", 5, 30, 10)

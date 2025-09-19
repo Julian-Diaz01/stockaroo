@@ -320,6 +320,46 @@ def main():
             help="Number of days to hold the investment"
         )
         
+        # Day Trading Strategy Options
+        st.subheader("📈 Day Trading Strategy")
+        
+        enable_day_trading = st.checkbox(
+            "Enable Day Trading Strategy",
+            value=False,
+            help="Add day trading strategy based on prediction confidence"
+        )
+        
+        if enable_day_trading:
+            max_holding_days = st.slider(
+                "Max Holding Period (days)",
+                min_value=1,
+                max_value=30,
+                value=5,
+                help="Maximum number of days to hold a position"
+            )
+            
+            prediction_threshold = st.slider(
+                "Prediction Confidence Threshold (%)",
+                min_value=0.1,
+                max_value=5.0,
+                value=1.0,
+                step=0.1,
+                help="Minimum predicted price change to trigger a trade"
+            )
+            
+            stop_loss_threshold = st.slider(
+                "Stop Loss Threshold (%)",
+                min_value=0.5,
+                max_value=10.0,
+                value=3.0,
+                step=0.5,
+                help="Maximum loss before selling position"
+            )
+        else:
+            max_holding_days = 1
+            prediction_threshold = 1.0
+            stop_loss_threshold = 3.0
+        
         # Run analysis button
         run_analysis_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
         
@@ -345,7 +385,8 @@ def main():
                     ridge_alpha, lasso_alpha, n_estimators, max_depth,
                     chart_type, show_volume, show_earnings_markers,
                     investment_amount, investment_days,
-                    enable_rolling_backtest, backtest_train_size, backtest_test_size, backtest_step_size
+                    enable_rolling_backtest, backtest_train_size, backtest_test_size, backtest_step_size,
+                    enable_day_trading, max_holding_days, prediction_threshold, stop_loss_threshold
                 )
                 st.session_state.analysis_results = results
                 
@@ -371,7 +412,8 @@ def run_analysis(symbol, period, interval, models_to_use, lookback_window, test_
                 ridge_alpha=1.0, lasso_alpha=0.1, n_estimators=100, max_depth=10,
                 chart_type="Candlestick", show_volume=True, show_earnings_markers=True,
                 investment_amount=10000, investment_days=30,
-                enable_rolling_backtest=False, backtest_train_size=100, backtest_test_size=20, backtest_step_size=5):
+                enable_rolling_backtest=False, backtest_train_size=100, backtest_test_size=20, backtest_step_size=5,
+                enable_day_trading=False, max_holding_days=1, prediction_threshold=1.0, stop_loss_threshold=3.0):
     """Run the improved stock analysis pipeline with earnings integration."""
     
     # Step 1: Data Collection
@@ -514,7 +556,8 @@ def run_analysis(symbol, period, interval, models_to_use, lookback_window, test_
     # Calculate investment returns
     investment_results = calculate_investment_returns(
         raw_data, eval_results, best_model, 
-        investment_amount, investment_days, symbol
+        investment_amount, investment_days, symbol,
+        enable_day_trading, max_holding_days, prediction_threshold, stop_loss_threshold
     )
     
     # Perform rolling backtest if enabled
@@ -570,10 +613,15 @@ def run_analysis(symbol, period, interval, models_to_use, lookback_window, test_
         'investment_days': investment_days,
         'investment_results': investment_results,
         'enable_rolling_backtest': enable_rolling_backtest,
-        'rolling_backtest_results': rolling_backtest_results
+        'rolling_backtest_results': rolling_backtest_results,
+        'enable_day_trading': enable_day_trading,
+        'max_holding_days': max_holding_days,
+        'prediction_threshold': prediction_threshold,
+        'stop_loss_threshold': stop_loss_threshold
     }
 
-def calculate_investment_returns(raw_data, eval_results, best_model, investment_amount, investment_days, symbol):
+def calculate_investment_returns(raw_data, eval_results, best_model, investment_amount, investment_days, symbol,
+                                enable_day_trading=False, max_holding_days=1, prediction_threshold=1.0, stop_loss_threshold=3.0):
     """Calculate potential investment returns based on model predictions."""
     
     if not eval_results or not best_model or best_model not in eval_results:
@@ -606,6 +654,11 @@ def calculate_investment_returns(raw_data, eval_results, best_model, investment_
             buy_hold_return = buy_hold_value - investment_amount
             buy_hold_return_pct = (buy_hold_return / investment_amount) * 100
             
+            # Get actual dates for buy/sell
+            test_start_idx = len(raw_data) - len(actual_prices)
+            buy_date = raw_data.index[test_start_idx]
+            sell_date = raw_data.index[test_start_idx + min(investment_days - 1, len(actual_prices) - 1)]
+            
             results['buy_hold'] = {
                 'strategy': 'Buy & Hold (Actual)',
                 'initial_value': investment_amount,
@@ -614,7 +667,12 @@ def calculate_investment_returns(raw_data, eval_results, best_model, investment_
                 'return_percentage': buy_hold_return_pct,
                 'buy_price': buy_price,
                 'sell_price': sell_price,
-                'shares': shares_bought
+                'shares': shares_bought,
+                'buy_date': buy_date,
+                'sell_date': sell_date,
+                'holding_days': investment_days,
+                'buy_day_index': 0,
+                'sell_day_index': min(investment_days - 1, len(actual_prices) - 1)
             }
         
         # 2. Model-based trading (using predictions)
@@ -623,6 +681,9 @@ def calculate_investment_returns(raw_data, eval_results, best_model, investment_
             trading_returns = []
             current_shares = 0
             current_cash = investment_amount
+            trade_history = []
+            buy_price = 0
+            buy_day = 0
             
             for i in range(min(investment_days, len(y_test) - 1)):
                 current_price = actual_prices[i]
@@ -634,15 +695,42 @@ def calculate_investment_returns(raw_data, eval_results, best_model, investment_
                     shares_to_buy = current_cash / current_price
                     current_shares += shares_to_buy
                     current_cash = 0
+                    buy_price = current_price
+                    buy_day = i
                 elif predicted_price < current_price and current_shares > 0:
                     # Sell all shares
                     current_cash = current_shares * current_price
+                    trade_return = current_cash - (current_shares * buy_price)
+                    trade_return_pct = (trade_return / (current_shares * buy_price)) * 100
+                    
+                    # Record trade
+                    trade_history.append({
+                        'buy_day': buy_day,
+                        'sell_day': i,
+                        'buy_price': buy_price,
+                        'sell_price': current_price,
+                        'holding_days': i - buy_day,
+                        'return_pct': trade_return_pct
+                    })
+                    
                     current_shares = 0
             
             # Final value calculation
             if current_shares > 0:
                 final_price = actual_prices[min(investment_days - 1, len(actual_prices) - 1)]
                 final_value = current_shares * final_price
+                # Record final trade if still holding
+                if buy_price > 0:
+                    trade_return = final_value - (current_shares * buy_price)
+                    trade_return_pct = (trade_return / (current_shares * buy_price)) * 100
+                    trade_history.append({
+                        'buy_day': buy_day,
+                        'sell_day': min(investment_days - 1, len(actual_prices) - 1),
+                        'buy_price': buy_price,
+                        'sell_price': final_price,
+                        'holding_days': min(investment_days - 1, len(actual_prices) - 1) - buy_day,
+                        'return_pct': trade_return_pct
+                    })
             else:
                 final_value = current_cash
             
@@ -656,18 +744,31 @@ def calculate_investment_returns(raw_data, eval_results, best_model, investment_
                 'return_amount': model_return,
                 'return_percentage': model_return_pct,
                 'shares_held': current_shares,
-                'cash_remaining': current_cash
+                'cash_remaining': current_cash,
+                'trade_history': trade_history
             }
         
-        # 3. Perfect prediction (upper bound)
+        # 3. Day Trading Strategy (if enabled)
+        if enable_day_trading and len(y_test) >= investment_days:
+            day_trading_results = calculate_day_trading_strategy(
+                actual_prices, y_test, investment_amount, investment_days,
+                max_holding_days, prediction_threshold, stop_loss_threshold, best_model
+            )
+            if day_trading_results:
+                results['day_trading'] = day_trading_results
+        
+        # 4. Perfect prediction (upper bound)
         if len(actual_prices) >= investment_days:
             # Find the best possible buy and sell points
             best_buy_idx = 0
             best_sell_idx = min(investment_days - 1, len(actual_prices) - 1)
+            best_return_ratio = 1.0
             
             for i in range(min(investment_days, len(actual_prices))):
                 for j in range(i + 1, min(investment_days, len(actual_prices))):
-                    if actual_prices[j] / actual_prices[i] > actual_prices[best_sell_idx] / actual_prices[best_buy_idx]:
+                    return_ratio = actual_prices[j] / actual_prices[i]
+                    if return_ratio > best_return_ratio:
+                        best_return_ratio = return_ratio
                         best_buy_idx = i
                         best_sell_idx = j
             
@@ -677,6 +778,12 @@ def calculate_investment_returns(raw_data, eval_results, best_model, investment_
             perfect_value = perfect_shares * perfect_sell_price
             perfect_return = perfect_value - investment_amount
             perfect_return_pct = (perfect_return / investment_amount) * 100
+            perfect_holding_days = best_sell_idx - best_buy_idx
+            
+            # Get actual dates for buy/sell
+            test_start_idx = len(raw_data) - len(actual_prices)
+            buy_date = raw_data.index[test_start_idx + best_buy_idx]
+            sell_date = raw_data.index[test_start_idx + best_sell_idx]
             
             results['perfect_prediction'] = {
                 'strategy': 'Perfect Prediction (Upper Bound)',
@@ -686,7 +793,12 @@ def calculate_investment_returns(raw_data, eval_results, best_model, investment_
                 'return_percentage': perfect_return_pct,
                 'buy_price': perfect_buy_price,
                 'sell_price': perfect_sell_price,
-                'shares': perfect_shares
+                'shares': perfect_shares,
+                'buy_date': buy_date,
+                'sell_date': sell_date,
+                'holding_days': perfect_holding_days,
+                'buy_day_index': best_buy_idx,
+                'sell_day_index': best_sell_idx
             }
         
         return results
@@ -1606,6 +1718,109 @@ def display_performance_optimization(results):
     comparison_df = pd.DataFrame(model_comparison)
     st.dataframe(comparison_df, width='stretch')
 
+def calculate_day_trading_strategy(actual_prices, predictions, investment_amount, investment_days,
+                                 max_holding_days, prediction_threshold, stop_loss_threshold, model_name):
+    """Calculate day trading strategy returns with configurable holding periods."""
+    
+    try:
+        current_cash = investment_amount
+        current_shares = 0
+        current_holding_days = 0
+        buy_price = 0
+        total_trades = 0
+        winning_trades = 0
+        trade_history = []
+        
+        for i in range(min(investment_days, len(actual_prices) - 1)):
+            current_price = actual_prices[i]
+            predicted_price = predictions[i + 1] if i + 1 < len(predictions) else predictions[i]
+            
+            # Calculate predicted price change percentage
+            predicted_change_pct = ((predicted_price - current_price) / current_price) * 100
+            
+            # If we have shares, check for sell conditions
+            if current_shares > 0:
+                current_holding_days += 1
+                current_value = current_shares * current_price
+                current_return_pct = ((current_price - buy_price) / buy_price) * 100
+                
+                # Sell conditions:
+                # 1. Maximum holding period reached
+                # 2. Stop loss triggered
+                # 3. Prediction suggests selling (negative prediction)
+                should_sell = (
+                    current_holding_days >= max_holding_days or
+                    current_return_pct <= -stop_loss_threshold or
+                    predicted_change_pct < -prediction_threshold
+                )
+                
+                if should_sell:
+                    # Sell all shares
+                    current_cash = current_shares * current_price
+                    trade_return = current_cash - (current_shares * buy_price)
+                    trade_return_pct = (trade_return / (current_shares * buy_price)) * 100
+                    
+                    # Record trade
+                    trade_history.append({
+                        'buy_price': buy_price,
+                        'sell_price': current_price,
+                        'holding_days': current_holding_days,
+                        'return_pct': trade_return_pct,
+                        'reason': 'max_holding' if current_holding_days >= max_holding_days else 
+                                 'stop_loss' if current_return_pct <= -stop_loss_threshold else 'prediction'
+                    })
+                    
+                    total_trades += 1
+                    if trade_return > 0:
+                        winning_trades += 1
+                    
+                    current_shares = 0
+                    current_holding_days = 0
+                    buy_price = 0
+            
+            # If we have cash, check for buy conditions
+            elif current_cash > 0 and predicted_change_pct >= prediction_threshold:
+                # Buy with all available cash
+                shares_to_buy = current_cash / current_price
+                current_shares = shares_to_buy
+                current_cash = 0
+                buy_price = current_price
+                current_holding_days = 0
+        
+        # Final value calculation
+        if current_shares > 0:
+            final_price = actual_prices[min(investment_days - 1, len(actual_prices) - 1)]
+            final_value = current_shares * final_price
+        else:
+            final_value = current_cash
+        
+        day_trading_return = final_value - investment_amount
+        day_trading_return_pct = (day_trading_return / investment_amount) * 100
+        
+        # Calculate additional metrics
+        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+        avg_trade_return = np.mean([trade['return_pct'] for trade in trade_history]) if trade_history else 0
+        
+        return {
+            'strategy': f'Day Trading ({model_name.replace("_", " ").title()})',
+            'initial_value': investment_amount,
+            'final_value': final_value,
+            'return_amount': day_trading_return,
+            'return_percentage': day_trading_return_pct,
+            'total_trades': total_trades,
+            'winning_trades': winning_trades,
+            'win_rate': win_rate,
+            'avg_trade_return': avg_trade_return,
+            'max_holding_days': max_holding_days,
+            'prediction_threshold': prediction_threshold,
+            'stop_loss_threshold': stop_loss_threshold,
+            'trade_history': trade_history
+        }
+        
+    except Exception as e:
+        st.warning(f"Error calculating day trading strategy: {e}")
+        return None
+
 def display_rolling_backtest_results(results):
     """Display rolling backtest (walk-forward validation) results."""
     
@@ -1804,13 +2019,24 @@ def display_investment_results(results):
     
     for strategy_key, strategy_data_dict in investment_results.items():
         if strategy_data_dict:
-            strategy_data.append({
+            # Base strategy data
+            strategy_row = {
                 'Strategy': strategy_data_dict['strategy'],
                 'Initial Value': f"${strategy_data_dict['initial_value']:,.2f}",
                 'Final Value': f"${strategy_data_dict['final_value']:,.2f}",
                 'Return Amount': f"${strategy_data_dict['return_amount']:,.2f}",
                 'Return %': f"{strategy_data_dict['return_percentage']:+.2f}%"
-            })
+            }
+            
+            # Add day trading specific metrics
+            if strategy_key == 'day_trading':
+                strategy_row.update({
+                    'Total Trades': strategy_data_dict.get('total_trades', 0),
+                    'Win Rate': f"{strategy_data_dict.get('win_rate', 0):.1f}%",
+                    'Avg Trade Return': f"{strategy_data_dict.get('avg_trade_return', 0):+.2f}%"
+                })
+            
+            strategy_data.append(strategy_row)
     
     if strategy_data:
         strategy_df = pd.DataFrame(strategy_data)
@@ -1841,6 +2067,72 @@ def display_investment_results(results):
         
         st.plotly_chart(fig, use_container_width=True)
         
+        # Investment Signals and Timing
+        st.subheader("📅 Investment Signals & Timing")
+        
+        # Create detailed investment signals for each strategy
+        signals_data = []
+        
+        for strategy_key, strategy_data_dict in investment_results.items():
+            if strategy_data_dict:
+                if strategy_key == 'buy_hold':
+                    signals_data.append({
+                        'Strategy': strategy_data_dict['strategy'],
+                        'Action': 'BUY & HOLD',
+                        'Buy Date': strategy_data_dict.get('buy_date', 'N/A').strftime('%Y-%m-%d') if hasattr(strategy_data_dict.get('buy_date', 'N/A'), 'strftime') else 'N/A',
+                        'Buy Price': f"${strategy_data_dict.get('buy_price', 0):.2f}",
+                        'Sell Date': strategy_data_dict.get('sell_date', 'N/A').strftime('%Y-%m-%d') if hasattr(strategy_data_dict.get('sell_date', 'N/A'), 'strftime') else 'N/A',
+                        'Sell Price': f"${strategy_data_dict.get('sell_price', 0):.2f}",
+                        'Holding Days': strategy_data_dict.get('holding_days', 0),
+                        'Investment Amount': f"${strategy_data_dict.get('initial_value', 0):,.2f}",
+                        'Shares Bought': f"{strategy_data_dict.get('shares', 0):.2f}"
+                    })
+                
+                elif strategy_key == 'perfect_prediction':
+                    signals_data.append({
+                        'Strategy': strategy_data_dict['strategy'],
+                        'Action': 'OPTIMAL TIMING',
+                        'Buy Date': strategy_data_dict.get('buy_date', 'N/A').strftime('%Y-%m-%d') if hasattr(strategy_data_dict.get('buy_date', 'N/A'), 'strftime') else 'N/A',
+                        'Buy Price': f"${strategy_data_dict.get('buy_price', 0):.2f}",
+                        'Sell Date': strategy_data_dict.get('sell_date', 'N/A').strftime('%Y-%m-%d') if hasattr(strategy_data_dict.get('sell_date', 'N/A'), 'strftime') else 'N/A',
+                        'Sell Price': f"${strategy_data_dict.get('sell_price', 0):.2f}",
+                        'Holding Days': strategy_data_dict.get('holding_days', 0),
+                        'Investment Amount': f"${strategy_data_dict.get('initial_value', 0):,.2f}",
+                        'Shares Bought': f"{strategy_data_dict.get('shares', 0):.2f}"
+                    })
+                
+                elif strategy_key == 'model_trading':
+                    trade_history = strategy_data_dict.get('trade_history', [])
+                    if trade_history:
+                        for i, trade in enumerate(trade_history):
+                            signals_data.append({
+                                'Strategy': f"{strategy_data_dict['strategy']} (Trade {i+1})",
+                                'Action': 'MODEL SIGNAL',
+                                'Buy Date': f"Day {trade.get('buy_day', 0) + 1}",
+                                'Buy Price': f"${trade.get('buy_price', 0):.2f}",
+                                'Sell Date': f"Day {trade.get('sell_day', 0) + 1}",
+                                'Sell Price': f"${trade.get('sell_price', 0):.2f}",
+                                'Holding Days': trade.get('holding_days', 0),
+                                'Investment Amount': f"${strategy_data_dict.get('initial_value', 0):,.2f}",
+                                'Shares Bought': f"{strategy_data_dict.get('initial_value', 0) / trade.get('buy_price', 1):.2f}"
+                            })
+                    else:
+                        signals_data.append({
+                            'Strategy': strategy_data_dict['strategy'],
+                            'Action': 'NO TRADES',
+                            'Buy Date': 'N/A',
+                            'Buy Price': 'N/A',
+                            'Sell Date': 'N/A',
+                            'Sell Price': 'N/A',
+                            'Holding Days': 0,
+                            'Investment Amount': f"${strategy_data_dict.get('initial_value', 0):,.2f}",
+                            'Shares Bought': '0'
+                        })
+        
+        if signals_data:
+            signals_df = pd.DataFrame(signals_data)
+            st.dataframe(signals_df, width='stretch')
+        
         # Strategy insights
         st.subheader("💡 Strategy Insights")
         
@@ -1861,6 +2153,31 @@ def display_investment_results(results):
                 st.write(f"Return: {worst_strategy['Return %']}")
                 st.write(f"Final Value: {worst_strategy['Final Value']}")
         
+        # Actionable Investment Advice
+        st.subheader("🎯 Actionable Investment Advice")
+        
+        if 'perfect_prediction' in investment_results and investment_results['perfect_prediction']:
+            perfect_data = investment_results['perfect_prediction']
+            st.info(f"""
+            **📈 Perfect Timing Strategy:**
+            - **When to Buy**: {perfect_data.get('buy_date', 'N/A').strftime('%Y-%m-%d') if hasattr(perfect_data.get('buy_date', 'N/A'), 'strftime') else 'N/A'} at ${perfect_data.get('buy_price', 0):.2f}
+            - **When to Sell**: {perfect_data.get('sell_date', 'N/A').strftime('%Y-%m-%d') if hasattr(perfect_data.get('sell_date', 'N/A'), 'strftime') else 'N/A'} at ${perfect_data.get('sell_price', 0):.2f}
+            - **How Long to Hold**: {perfect_data.get('holding_days', 0)} days
+            - **How Much to Invest**: ${perfect_data.get('initial_value', 0):,.2f} (buy {perfect_data.get('shares', 0):.2f} shares)
+            - **Expected Return**: {perfect_data.get('return_percentage', 0):+.2f}%
+            """)
+        
+        if 'buy_hold' in investment_results and investment_results['buy_hold']:
+            buy_hold_data = investment_results['buy_hold']
+            st.info(f"""
+            **📊 Buy & Hold Strategy:**
+            - **When to Buy**: {buy_hold_data.get('buy_date', 'N/A').strftime('%Y-%m-%d') if hasattr(buy_hold_data.get('buy_date', 'N/A'), 'strftime') else 'N/A'} at ${buy_hold_data.get('buy_price', 0):.2f}
+            - **When to Sell**: {buy_hold_data.get('sell_date', 'N/A').strftime('%Y-%m-%d') if hasattr(buy_hold_data.get('sell_date', 'N/A'), 'strftime') else 'N/A'} at ${buy_hold_data.get('sell_price', 0):.2f}
+            - **How Long to Hold**: {buy_hold_data.get('holding_days', 0)} days
+            - **How Much to Invest**: ${buy_hold_data.get('initial_value', 0):,.2f} (buy {buy_hold_data.get('shares', 0):.2f} shares)
+            - **Expected Return**: {buy_hold_data.get('return_percentage', 0):+.2f}%
+            """)
+        
         # Model performance vs buy & hold
         if 'buy_hold' in investment_results and 'model_trading' in investment_results:
             buy_hold_return = investment_results['buy_hold']['return_percentage']
@@ -1873,6 +2190,72 @@ def display_investment_results(results):
                 underperformance = buy_hold_return - model_return
                 st.info(f"📉 **Model Underperformed Buy & Hold by {underperformance:.2f}%**")
         
+        # Day Trading Details (if enabled)
+        if 'day_trading' in investment_results and investment_results['day_trading']:
+            st.subheader("📈 Day Trading Analysis")
+            day_trading_data = investment_results['day_trading']
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Trades", day_trading_data.get('total_trades', 0))
+            with col2:
+                st.metric("Win Rate", f"{day_trading_data.get('win_rate', 0):.1f}%")
+            with col3:
+                st.metric("Avg Trade Return", f"{day_trading_data.get('avg_trade_return', 0):+.2f}%")
+            with col4:
+                st.metric("Max Holding Days", day_trading_data.get('max_holding_days', 1))
+            
+            # Trading parameters
+            st.subheader("⚙️ Trading Parameters")
+            param_col1, param_col2, param_col3 = st.columns(3)
+            
+            with param_col1:
+                st.metric("Prediction Threshold", f"{day_trading_data.get('prediction_threshold', 1.0):.1f}%")
+            with param_col2:
+                st.metric("Stop Loss Threshold", f"{day_trading_data.get('stop_loss_threshold', 3.0):.1f}%")
+            with param_col3:
+                st.metric("Max Holding Period", f"{day_trading_data.get('max_holding_days', 1)} days")
+            
+            # Trade history
+            trade_history = day_trading_data.get('trade_history', [])
+            if trade_history:
+                st.subheader("📋 Trade History")
+                trade_df = pd.DataFrame(trade_history)
+                trade_df['Buy Price'] = trade_df['buy_price'].apply(lambda x: f"${x:.2f}")
+                trade_df['Sell Price'] = trade_df['sell_price'].apply(lambda x: f"${x:.2f}")
+                trade_df['Return %'] = trade_df['return_pct'].apply(lambda x: f"{x:+.2f}%")
+                trade_df['Holding Days'] = trade_df['holding_days']
+                trade_df['Reason'] = trade_df['reason'].str.replace('_', ' ').str.title()
+                
+                display_columns = ['Buy Price', 'Sell Price', 'Holding Days', 'Return %', 'Reason']
+                st.dataframe(trade_df[display_columns], width='stretch')
+                
+                # Trade performance chart
+                if len(trade_history) > 1:
+                    st.subheader("📊 Trade Performance Over Time")
+                    trade_returns = [trade['return_pct'] for trade in trade_history]
+                    cumulative_returns = np.cumsum(trade_returns)
+                    
+                    fig_trades = go.Figure()
+                    fig_trades.add_trace(go.Scatter(
+                        x=list(range(1, len(cumulative_returns) + 1)),
+                        y=cumulative_returns,
+                        mode='lines+markers',
+                        name='Cumulative Returns',
+                        line=dict(color='blue', width=2),
+                        marker=dict(size=6)
+                    ))
+                    
+                    fig_trades.update_layout(
+                        title="Cumulative Trade Returns",
+                        xaxis_title="Trade Number",
+                        yaxis_title="Cumulative Return (%)",
+                        height=400
+                    )
+                    
+                    st.plotly_chart(fig_trades, use_container_width=True)
+        
         # Risk assessment
         st.subheader("⚠️ Risk Assessment")
         st.markdown("""
@@ -1881,6 +2264,7 @@ def display_investment_results(results):
         - Past performance does not guarantee future results
         - Real trading involves transaction costs, slippage, and market impact
         - Model predictions may not be accurate in real-time trading
+        - Day trading involves higher risk and requires active monitoring
         - Consider your risk tolerance before making investment decisions
         """)
         
