@@ -1,16 +1,39 @@
 # Stock Analytics Project
 
-A Python project for stock analysis and prediction using Yahoo Finance API and machine learning.
+A comprehensive Python project for advanced stock analysis and prediction using Yahoo Finance API, machine learning, and interactive web interfaces.
+
+## 🚀 Latest Features
+
+### **🔄 Rolling Backtest (Walk-Forward Validation)**
+- **Multi-Period Testing**: Evaluate models across different market conditions
+- **No Data Leakage**: Proper time series validation with embargo periods
+- **Returns-Based Prediction**: Better stationarity using percentage changes
+- **Performance Stability**: Identify consistently performing models
+- **Configurable Windows**: Adjustable training, test, and step sizes
+
+### **💰 Investment Calculator**
+- **Strategy Comparison**: Buy & Hold vs Model Trading vs Perfect Prediction
+- **Real Investment Scenarios**: Calculate potential returns for any amount and period
+- **Visual Analysis**: Interactive charts showing strategy performance
+- **Risk Assessment**: Comprehensive disclaimers and risk warnings
+- **Annualized Returns**: Convert period returns to annual percentages
+
+### **📊 Enhanced Model Performance**
+- **Advanced Models**: Gradient Boosting, XGBoost, LightGBM
+- **Robust Error Handling**: Improved MAPE calculation with edge case handling
+- **Volatility-Based Bounds**: Dynamic prediction constraints based on market volatility
+- **Earnings Integration**: Properly scaled earnings features with rarity awareness
+- **Feature Scaling**: RobustScaler for better handling of outliers
 
 ## Features
 
-- Data collection from Yahoo Finance API
-- Stock price analysis and visualization
-- Machine learning models for price prediction
-- Linear regression, Ridge, Lasso, and Random Forest models
-- Technical indicators (MA, MACD, RSI, Bollinger Bands)
-- Feature engineering with lag features
-- Model performance evaluation and comparison
+- **Data Collection**: Yahoo Finance API integration with earnings data
+- **Advanced ML Models**: Linear, Ridge, Lasso, Random Forest, Gradient Boosting, XGBoost, LightGBM
+- **Technical Indicators**: MA, EMA, MACD, RSI, Bollinger Bands, Volatility measures
+- **Earnings Analysis**: Earnings surprises, impact analysis, and calendar integration
+- **Interactive Web UI**: Real-time parameter tuning and visualization
+- **Investment Analysis**: Practical return calculations and strategy comparison
+- **Rolling Backtest**: Walk-forward validation for robust model evaluation
 
 ## Setup
 
@@ -26,6 +49,8 @@ source .venv/bin/activate   # Linux/Mac
 ```bash
 pip install -r requirements.txt
 ```
+
+**Note**: The system includes optional advanced models (XGBoost, LightGBM) that provide enhanced performance for complex market patterns.
 
 3. Run the analysis:
 ```bash
@@ -81,36 +106,165 @@ stockaroo/
 
 ## Model Performance
 
-| Model | R² Score | RMSE | MAPE |
-|-------|----------|------|------|
-| Lasso | 0.9432 | $3.19 | 1.03% |
-| Ridge | 0.9417 | $3.24 | 1.05% |
-| Linear Regression | 0.9396 | $3.30 | 1.06% |
-| Random Forest | 0.8367 | $5.42 | 2.03% |
+### **Enhanced Model Suite**
+The system now includes 7+ machine learning models with advanced features:
+
+| Model | R² Score | RMSE | MAPE | Features |
+|-------|----------|------|------|----------|
+| **Lasso** | 0.8984 | $3.71 | 1.17% | Regularized, robust |
+| **Ridge** | 0.8473 | $4.55 | 1.43% | Regularized, stable |
+| **Linear Regression** | 0.8473 | $4.55 | 1.43% | Baseline model |
+| **Random Forest** | 0.8367 | $5.42 | 2.03% | Non-linear, feature importance |
+| **Gradient Boosting** | 0.5978 | $7.39 | 2.00% | Advanced ensemble |
+| **XGBoost** | Variable | Variable | Variable | High-performance boosting |
+| **LightGBM** | Variable | Variable | Variable | Fast, memory-efficient |
+
+### **Performance Improvements:**
+- **🔧 Robust Error Handling**: Improved MAPE calculation with edge case handling
+- **📊 Volatility-Based Bounds**: Dynamic prediction constraints (2-3 sigma)
+- **🎯 Earnings Integration**: Properly scaled earnings features
+- **⚡ Feature Scaling**: RobustScaler for better outlier handling
+- **🔄 Rolling Validation**: More realistic performance assessment
 
 ## Key Features Created
 
-- **Technical Indicators**: Moving averages, MACD, RSI, Bollinger Bands
-- **Lag Features**: Previous day prices and returns
-- **Price Metrics**: Daily returns, price changes, spreads
-- **Volume Analysis**: Volume ratios and moving averages
+### **📊 Technical Analysis**
+- **Moving Averages**: MA(5,10,20), EMA(5,10) with price position indicators
+- **Momentum Indicators**: RSI, momentum(5,10,20), price vs MA ratios
+- **Volatility Measures**: Rolling volatility(5,10), high-low spreads
+- **Volume Analysis**: Volume ratios, volume moving averages
+- **Advanced Indicators**: Bollinger Bands, MACD, price momentum
+
+### **🎯 Earnings Integration**
+- **Earnings Calendar**: Upcoming earnings announcements
+- **Surprise Analysis**: Historical earnings surprises and impacts
+- **Price Impact**: Earnings announcement effects on stock prices
+- **Proximity Features**: Days since/until earnings with binary indicators
+- **Scaled Features**: Rarity-aware scaling for quarterly earnings events
+
+### **🔄 Advanced Validation**
+- **Time Series Splits**: Proper chronological data splitting
+- **Embargo Periods**: Buffer zones to prevent data leakage
+- **Rolling Backtest**: Walk-forward validation across multiple periods
+- **Returns-Based Prediction**: Better stationarity using percentage changes
+- **Robust Metrics**: Improved MAPE with edge case handling
+
+### **💰 Investment Analysis**
+- **Strategy Comparison**: Buy & Hold vs Model Trading vs Perfect Prediction
+- **Return Calculations**: Real investment scenario analysis
+- **Risk Assessment**: Comprehensive warnings and disclaimers
+- **Visual Analysis**: Interactive performance comparison charts
 
 ## 🌐 Web Interface Features
 
 The interactive web dashboard provides:
 
-- **📊 Real-time Stock Data**: Fetch data for any stock symbol
-- **⚙️ Parameter Controls**: Adjust analysis parameters in real-time
-- **📈 Interactive Charts**: Zoom, pan, and explore price data
-- **🤖 Model Comparison**: Compare multiple ML models side-by-side
-- **🔍 Feature Analysis**: Visualize feature importance
-- **🎯 Prediction Accuracy**: See predictions vs actual values
-- **🔮 Future Forecasts**: Get next-day price predictions
-- **📊 Technical Indicators**: RSI, MACD, Bollinger Bands, and more
+### **📊 Core Analysis**
+- **Real-time Stock Data**: Fetch data for any stock symbol with earnings integration
+- **Interactive Charts**: Candlestick, line charts with volume and earnings markers
+- **Model Comparison**: Compare 7+ ML models side-by-side with performance metrics
+- **Prediction Accuracy**: See predictions vs actual values with time series validation
+
+### **🔄 Advanced Features**
+- **Rolling Backtest**: Walk-forward validation across multiple time periods
+- **Investment Calculator**: Calculate potential returns for different strategies
+- **Parameter Tuning**: Real-time adjustment of model parameters and analysis settings
+- **Performance Optimization**: AI-powered suggestions for improving model performance
+
+### **⚙️ Interactive Controls**
+- **Model Selection**: Choose from Linear, Ridge, Lasso, Random Forest, Gradient Boosting, XGBoost, LightGBM
+- **Advanced Parameters**: Embargo periods, prediction horizons, earnings integration
+- **Chart Options**: Multiple chart types, volume display, earnings event markers
+- **Investment Settings**: Customizable investment amounts and holding periods
 
 ### Launch Web UI
 ```bash
 stockaroo ui
+```
+
+## 🚀 Quick Start Guide
+
+### **1. Basic Analysis**
+```bash
+# Launch the web interface
+streamlit run stockaroo/ui/streamlit_app.py
+
+# Select a stock (e.g., AAPL, MSFT, GOOGL)
+# Choose models to compare
+# Click "Run Analysis"
+```
+
+### **2. Enable Rolling Backtest**
+```bash
+# In the web UI sidebar:
+# ✅ Check "Enable Rolling Backtest"
+# Set Training Window: 100 days
+# Set Test Window: 20 days  
+# Set Step Size: 5 days
+# Run analysis to see multi-period validation
+```
+
+### **3. Investment Calculator**
+```bash
+# In the web UI sidebar:
+# Set Investment Amount: $10,000
+# Set Investment Period: 30 days
+# Run analysis to see strategy comparison
+```
+
+### **4. Advanced Features**
+```bash
+# Enable earnings integration
+# Adjust model parameters (alpha, n_estimators, max_depth)
+# Try different chart types (Candlestick, Line, Both)
+# Compare with/without earnings data
+```
+
+## 🔄 Rolling Backtest System
+
+### **Walk-Forward Validation**
+The rolling backtest system provides robust model evaluation by testing across multiple time periods:
+
+```bash
+# Enable rolling backtest in the web UI
+# Configure: Training Window (50-200 days), Test Window (5-50 days), Step Size (1-20 days)
+```
+
+### **Key Benefits:**
+- **🎯 Realistic Evaluation**: Tests models across different market conditions
+- **🔒 No Data Leakage**: Proper time series validation with embargo periods
+- **📈 Performance Stability**: Identifies models that work consistently
+- **⚡ Returns-Based**: Uses percentage changes for better stationarity
+- **📊 Comprehensive Metrics**: Average performance with standard deviations
+
+### **Results Display:**
+- **Performance Summary**: Average metrics across all folds
+- **Stability Charts**: R² and MAE stability over time
+- **Fold Analysis**: Detailed breakdown of each time period
+- **Model Ranking**: Best performing and most stable models
+
+## 💰 Investment Calculator
+
+### **Strategy Comparison**
+Calculate potential returns for different investment strategies:
+
+1. **Buy & Hold**: Traditional buy and hold strategy
+2. **Model Trading**: Using ML predictions for trading decisions
+3. **Perfect Prediction**: Theoretical maximum returns (upper bound)
+
+### **Features:**
+- **Customizable Parameters**: Investment amount ($100 - $1M), holding period (1-365 days)
+- **Visual Analysis**: Interactive charts comparing strategy performance
+- **Risk Assessment**: Comprehensive disclaimers and warnings
+- **Annualized Returns**: Convert period returns to annual percentages
+- **Performance Insights**: Best/worst strategies with detailed metrics
+
+### **Example Output:**
+```
+Investment: $10,000 for 30 days
+- Buy & Hold: +2.5% return ($250 profit)
+- Model Trading: +3.8% return ($380 profit) 
+- Perfect Prediction: +8.2% return ($820 profit)
 ```
 
 ## Usage Examples

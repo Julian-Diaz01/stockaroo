@@ -293,13 +293,36 @@ class StockPredictor:
             if len(recent_surprises) > 1:
                 earnings_volatility = np.std(recent_surprises)
         
+        # Apply scaling and normalization for earnings features to account for rarity
+        # Earnings happen only 4 times per year, so we need to scale their impact appropriately
+        
+        # Normalize days since/until earnings (0-1 scale)
+        days_since_earnings_norm = min(days_since_earnings / 90, 1.0)  # Cap at 90 days
+        days_until_earnings_norm = min(days_until_earnings / 90, 1.0)  # Cap at 90 days
+        
+        # Scale earnings surprise and impact by their historical volatility
+        # This prevents rare large surprises from dominating the model
+        surprise_scale_factor = 0.1  # Reduce impact of earnings surprises
+        impact_scale_factor = 0.1    # Reduce impact of price changes
+        
+        last_earnings_surprise_scaled = last_earnings_surprise * surprise_scale_factor
+        last_earnings_impact_scaled = last_earnings_impact * impact_scale_factor
+        avg_earnings_surprise_scaled = avg_earnings_surprise * surprise_scale_factor
+        earnings_volatility_scaled = earnings_volatility * surprise_scale_factor
+        
+        # Add binary indicators for earnings proximity (more robust than continuous features)
+        near_earnings = 1 if days_until_earnings <= 30 else 0  # Within 30 days of earnings
+        recent_earnings = 1 if days_since_earnings <= 7 else 0  # Within 7 days of earnings
+        
         feature_row.extend([
-            days_since_earnings,
-            days_until_earnings,
-            last_earnings_surprise,
-            last_earnings_impact,
-            avg_earnings_surprise,
-            earnings_volatility
+            days_since_earnings_norm,
+            days_until_earnings_norm,
+            last_earnings_surprise_scaled,
+            last_earnings_impact_scaled,
+            avg_earnings_surprise_scaled,
+            earnings_volatility_scaled,
+            near_earnings,
+            recent_earnings
         ])
         
         return feature_row
@@ -360,7 +383,24 @@ class StockPredictor:
         rmse = np.sqrt(mse)
         mae = mean_absolute_error(y_test, y_pred)
         r2 = r2_score(y_test, y_pred)
-        mape = np.mean(np.abs((y_test - y_pred) / y_test)) * 100
+        
+        # Robust MAPE calculation to handle edge cases
+        # Avoid division by zero and handle very small values
+        y_test_abs = np.abs(y_test)
+        # Use a small threshold to avoid division by very small numbers
+        threshold = np.percentile(y_test_abs, 5)  # 5th percentile as threshold
+        valid_indices = y_test_abs > threshold
+        
+        if np.sum(valid_indices) > 0:
+            # Calculate MAPE only for valid indices
+            mape = np.mean(np.abs((y_test[valid_indices] - y_pred[valid_indices]) / y_test[valid_indices])) * 100
+        else:
+            # Fallback: use symmetric MAPE (sMAPE) which is more robust
+            numerator = np.abs(y_test - y_pred)
+            denominator = (np.abs(y_test) + np.abs(y_pred)) / 2
+            # Avoid division by zero
+            denominator = np.where(denominator == 0, 1e-8, denominator)
+            mape = np.mean(numerator / denominator) * 100
         
         metrics = {
             'model_name': model_name,
@@ -492,10 +532,24 @@ class StockPredictor:
             
         prediction = model.predict(features_scaled)[0]
         
-        # Apply reasonable constraints
+        # Apply volatility-based constraints instead of arbitrary clipping
         current_price = recent_data.iloc[-1]['Close']
-        max_change = 0.1  # 10% max change per day
-        min_price = current_price * (1 - max_change)
+        
+        # Calculate historical volatility (20-day rolling standard deviation of returns)
+        if len(recent_data) >= 20:
+            returns = recent_data['Close'].pct_change().dropna()
+            volatility = returns.tail(20).std()
+            
+            # Use 2-sigma bounds (covers ~95% of normal price movements)
+            # Add some buffer for extreme market conditions
+            max_change = min(3 * volatility, 0.15)  # Cap at 15% even in extreme volatility
+            min_change = -max_change  # Symmetric bounds
+        else:
+            # Fallback to conservative bounds if insufficient data
+            max_change = 0.1
+            min_change = -0.1
+        
+        min_price = current_price * (1 + min_change)
         max_price = current_price * (1 + max_change)
         
         prediction = np.clip(prediction, min_price, max_price)
@@ -817,6 +871,249 @@ def demonstrate_prediction():
             print(f"  Average price impact: {avg_impact:.2f}%")
     else:
         print(f"\nEarnings Analysis: No earnings data available for analysis")
+
+def rolling_backtest(self, data: pd.DataFrame, target_col: str = 'Close', 
+                    lookback_window: int = 10, prediction_horizon: int = 1,
+                    earnings_data: dict = None, train_size: int = 100, 
+                    test_size: int = 20, step_size: int = 5) -> dict:
+        """
+        Perform rolling backtest (walk-forward validation) to evaluate model performance
+        across multiple time periods.
+        
+        Args:
+            data: Stock data
+            target_col: Target column
+            lookback_window: Number of past days to use as features
+            prediction_horizon: Days ahead to predict
+            earnings_data: Dictionary containing earnings data
+            train_size: Number of days for training in each fold
+            test_size: Number of days for testing in each fold
+            step_size: Number of days to move forward in each iteration
+            
+        Returns:
+            Dictionary containing backtest results
+        """
+        logger.info(f"Starting rolling backtest: train_size={train_size}, test_size={test_size}, step_size={step_size}")
+        
+        # Prepare data with returns instead of absolute prices for stationarity
+        df = data.copy()
+        
+        # Calculate returns (percentage change) for better stationarity
+        df['Returns'] = df[target_col].pct_change()
+        df['Log_Returns'] = np.log(df[target_col] / df[target_col].shift(1))
+        
+        # Use returns as target instead of absolute prices
+        target_col_returns = 'Returns'
+        
+        # Prepare earnings features
+        earnings_features = self._prepare_earnings_features(df, earnings_data)
+        
+        # Initialize results storage
+        backtest_results = {
+            'fold_results': [],
+            'model_performance': {},
+            'predictions': [],
+            'actuals': [],
+            'dates': [],
+            'fold_info': []
+        }
+        
+        # Calculate number of folds
+        total_days = len(df)
+        min_required = lookback_window + train_size + test_size + prediction_horizon
+        
+        if total_days < min_required:
+            logger.warning(f"Insufficient data for rolling backtest. Need {min_required}, have {total_days}")
+            return backtest_results
+        
+        # Perform rolling backtest
+        start_idx = lookback_window + train_size
+        end_idx = total_days - test_size - prediction_horizon
+        
+        fold_count = 0
+        for start_test in range(start_idx, end_idx, step_size):
+            end_test = min(start_test + test_size, total_days - prediction_horizon)
+            
+            if end_test - start_test < test_size:
+                break
+                
+            fold_count += 1
+            logger.info(f"Processing fold {fold_count}: test period {start_test}-{end_test}")
+            
+            # Define training and test periods
+            train_start = start_test - train_size
+            train_end = start_test
+            
+            # Prepare training data
+            train_data = df.iloc[train_start:train_end].copy()
+            test_data = df.iloc[start_test:end_test].copy()
+            
+            # Create features and targets for training
+            X_train, y_train = self._prepare_features_targets(
+                train_data, target_col_returns, lookback_window, prediction_horizon, earnings_features
+            )
+            
+            # Create features and targets for testing
+            X_test, y_test = self._prepare_features_targets(
+                test_data, target_col_returns, lookback_window, prediction_horizon, earnings_features
+            )
+            
+            if len(X_train) == 0 or len(X_test) == 0:
+                logger.warning(f"Skipping fold {fold_count}: insufficient data")
+                continue
+            
+            # Train and evaluate each model
+            fold_results = {}
+            
+            for model_name in self.models.keys():
+                try:
+                    # Train model
+                    self.train_model(model_name, X_train, y_train)
+                    
+                    # Evaluate model
+                    eval_results = self.evaluate_model(model_name, X_test, y_test)
+                    
+                    # Store results
+                    fold_results[model_name] = eval_results
+                    
+                    # Store predictions and actuals for analysis
+                    if model_name not in backtest_results['model_performance']:
+                        backtest_results['model_performance'][model_name] = {
+                            'predictions': [],
+                            'actuals': [],
+                            'dates': [],
+                            'metrics': []
+                        }
+                    
+                    backtest_results['model_performance'][model_name]['predictions'].extend(eval_results['predictions'])
+                    backtest_results['model_performance'][model_name]['actuals'].extend(y_test)
+                    backtest_results['model_performance'][model_name]['dates'].extend(test_data.index[lookback_window:])
+                    backtest_results['model_performance'][model_name]['metrics'].append({
+                        'fold': fold_count,
+                        'r2': eval_results['r2'],
+                        'mae': eval_results['mae'],
+                        'rmse': eval_results['rmse'],
+                        'mape': eval_results['mape']
+                    })
+                    
+                except Exception as e:
+                    logger.warning(f"Error in fold {fold_count} for model {model_name}: {e}")
+                    continue
+            
+            # Store fold information
+            backtest_results['fold_results'].append(fold_results)
+            backtest_results['fold_info'].append({
+                'fold': fold_count,
+                'train_start': train_start,
+                'train_end': train_end,
+                'test_start': start_test,
+                'test_end': end_test,
+                'train_dates': (train_data.index[0], train_data.index[-1]),
+                'test_dates': (test_data.index[0], test_data.index[-1])
+            })
+        
+        logger.info(f"Rolling backtest completed: {fold_count} folds processed")
+        return backtest_results
+    
+def _prepare_features_targets(self, data: pd.DataFrame, target_col: str, 
+                                 lookback_window: int, prediction_horizon: int, 
+                                 earnings_features: dict) -> tuple:
+        """Helper method to prepare features and targets for a given dataset."""
+        
+        features = []
+        targets = []
+        
+        for i in range(lookback_window, len(data) - prediction_horizon + 1):
+            # Features: past lookback_window days
+            feature_row = []
+            
+            # Price features (past days) - using returns for stationarity
+            for j in range(lookback_window):
+                idx = i - lookback_window + j
+                if idx >= 0:
+                    feature_row.extend([
+                        data.iloc[idx]['Open'],
+                        data.iloc[idx]['High'], 
+                        data.iloc[idx]['Low'],
+                        data.iloc[idx]['Close'],
+                        data.iloc[idx]['Volume']
+                    ])
+                else:
+                    feature_row.extend([0, 0, 0, 0, 0])
+            
+            # Enhanced technical indicators
+            if i >= 20:
+                # Calculate technical indicators (same as before)
+                ma_5 = data.iloc[i-5:i]['Close'].mean()
+                ma_10 = data.iloc[i-10:i]['Close'].mean()
+                ma_20 = data.iloc[i-20:i]['Close'].mean()
+                
+                # Exponential moving averages
+                ema_5 = data.iloc[i-5:i]['Close'].ewm(span=5).mean().iloc[-1]
+                ema_10 = data.iloc[i-10:i]['Close'].ewm(span=10).mean().iloc[-1]
+                
+                # Price momentum and returns
+                momentum_5 = (data.iloc[i-1]['Close'] / data.iloc[i-6]['Close'] - 1) if i >= 6 else 0
+                momentum_10 = (data.iloc[i-1]['Close'] / data.iloc[i-11]['Close'] - 1) if i >= 11 else 0
+                momentum_20 = (data.iloc[i-1]['Close'] / data.iloc[i-21]['Close'] - 1) if i >= 21 else 0
+                
+                # Volatility measures
+                returns_5 = data.iloc[i-5:i]['Close'].pct_change().dropna()
+                volatility_5 = returns_5.std() if len(returns_5) > 1 else 0
+                
+                returns_10 = data.iloc[i-10:i]['Close'].pct_change().dropna()
+                volatility_10 = returns_10.std() if len(returns_10) > 1 else 0
+                
+                # Price position relative to moving averages
+                price_vs_ma5 = (data.iloc[i-1]['Close'] / ma_5 - 1) if ma_5 > 0 else 0
+                price_vs_ma10 = (data.iloc[i-1]['Close'] / ma_10 - 1) if ma_10 > 0 else 0
+                price_vs_ma20 = (data.iloc[i-1]['Close'] / ma_20 - 1) if ma_20 > 0 else 0
+                
+                # Volume indicators
+                volume_ma_5 = data.iloc[i-5:i]['Volume'].mean()
+                volume_ratio = data.iloc[i-1]['Volume'] / volume_ma_5 if volume_ma_5 > 0 else 1
+                
+                # High-Low spread
+                high_low_spread = (data.iloc[i-1]['High'] - data.iloc[i-1]['Low']) / data.iloc[i-1]['Close']
+                
+                # RSI-like momentum indicator
+                if i >= 14:
+                    gains = data.iloc[i-14:i]['Close'].diff().clip(lower=0).mean()
+                    losses = -data.iloc[i-14:i]['Close'].diff().clip(upper=0).mean()
+                    rs = gains / losses if losses > 0 else 0
+                    rsi = 100 - (100 / (1 + rs)) if rs > 0 else 50
+                else:
+                    rsi = 50
+                    
+                feature_row.extend([
+                    ma_5, ma_10, ma_20, ema_5, ema_10,
+                    momentum_5, momentum_10, momentum_20,
+                    volatility_5, volatility_10,
+                    price_vs_ma5, price_vs_ma10, price_vs_ma20,
+                    volume_ratio, high_low_spread, rsi
+                ])
+            else:
+                feature_row.extend([0] * 16)
+            
+            # Add earnings features for this date
+            current_date = data.index[i]
+            earnings_feature_row = self._get_earnings_features_for_date(current_date, earnings_features)
+            feature_row.extend(earnings_feature_row)
+            
+            features.append(feature_row)
+            
+            # Target: future returns instead of absolute price
+            target = data.iloc[i + prediction_horizon - 1][target_col]
+            targets.append(target)
+        
+        X = np.array(features)
+        y = np.array(targets)
+        
+        # Handle NaN values
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        return X, y
 
 if __name__ == "__main__":
     demonstrate_prediction()

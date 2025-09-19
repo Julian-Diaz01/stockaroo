@@ -251,6 +251,44 @@ def main():
             help="Automatically re-run analysis when parameters change"
         )
         
+        # Rolling Backtest Options
+        st.subheader("🔄 Rolling Backtest")
+        
+        enable_rolling_backtest = st.checkbox(
+            "Enable Rolling Backtest", 
+            value=False,
+            help="Perform walk-forward validation across multiple time periods"
+        )
+        
+        if enable_rolling_backtest:
+            backtest_train_size = st.slider(
+                "Training Window (days)", 
+                min_value=50, 
+                max_value=200, 
+                value=100,
+                help="Number of days to use for training in each fold"
+            )
+            
+            backtest_test_size = st.slider(
+                "Test Window (days)", 
+                min_value=5, 
+                max_value=50, 
+                value=20,
+                help="Number of days to test in each fold"
+            )
+            
+            backtest_step_size = st.slider(
+                "Step Size (days)", 
+                min_value=1, 
+                max_value=20, 
+                value=5,
+                help="Number of days to move forward in each iteration"
+            )
+        else:
+            backtest_train_size = 100
+            backtest_test_size = 20
+            backtest_step_size = 5
+        
         # Investment Calculator
         st.subheader("💰 Investment Calculator")
         
@@ -295,7 +333,8 @@ def main():
                     embargo_period, prediction_horizon, include_earnings,
                     ridge_alpha, lasso_alpha, n_estimators, max_depth,
                     chart_type, show_volume, show_earnings_markers,
-                    investment_amount, investment_days
+                    investment_amount, investment_days,
+                    enable_rolling_backtest, backtest_train_size, backtest_test_size, backtest_step_size
                 )
                 st.session_state.analysis_results = results
                 
@@ -320,7 +359,8 @@ def run_analysis(symbol, period, interval, models_to_use, lookback_window, test_
                 embargo_period=5, prediction_horizon=1, include_earnings=True,
                 ridge_alpha=1.0, lasso_alpha=0.1, n_estimators=100, max_depth=10,
                 chart_type="Candlestick", show_volume=True, show_earnings_markers=True,
-                investment_amount=10000, investment_days=30):
+                investment_amount=10000, investment_days=30,
+                enable_rolling_backtest=False, backtest_train_size=100, backtest_test_size=20, backtest_step_size=5):
     """Run the improved stock analysis pipeline with earnings integration."""
     
     # Step 1: Data Collection
@@ -466,6 +506,24 @@ def run_analysis(symbol, period, interval, models_to_use, lookback_window, test_
         investment_amount, investment_days, symbol
     )
     
+    # Perform rolling backtest if enabled
+    rolling_backtest_results = None
+    if enable_rolling_backtest:
+        try:
+            st.info("🔄 Running rolling backtest (walk-forward validation)...")
+            rolling_backtest_results = predictor.rolling_backtest(
+                raw_data, 
+                lookback_window=lookback_window,
+                prediction_horizon=prediction_horizon,
+                earnings_data=earnings_data_to_use,
+                train_size=backtest_train_size,
+                test_size=backtest_test_size,
+                step_size=backtest_step_size
+            )
+        except Exception as e:
+            st.warning(f"Rolling backtest failed: {e}")
+            rolling_backtest_results = None
+    
     return {
         'raw_data': raw_data,
         'X_train': X_train,
@@ -499,7 +557,9 @@ def run_analysis(symbol, period, interval, models_to_use, lookback_window, test_
         'show_earnings_markers': show_earnings_markers,
         'investment_amount': investment_amount,
         'investment_days': investment_days,
-        'investment_results': investment_results
+        'investment_results': investment_results,
+        'enable_rolling_backtest': enable_rolling_backtest,
+        'rolling_backtest_results': rolling_backtest_results
     }
 
 def calculate_investment_returns(raw_data, eval_results, best_model, investment_amount, investment_days, symbol):
@@ -693,6 +753,11 @@ def display_results(results):
     # Interactive Performance Optimization
     st.header("🎛️ Performance Optimization Insights")
     display_performance_optimization(results)
+    
+    # Rolling Backtest Results
+    if results.get('enable_rolling_backtest') and results.get('rolling_backtest_results'):
+        st.header("🔄 Rolling Backtest Results")
+        display_rolling_backtest_results(results)
     
     # Investment Calculator Results
     if results.get('investment_results'):
@@ -1529,6 +1594,174 @@ def display_performance_optimization(results):
     
     comparison_df = pd.DataFrame(model_comparison)
     st.dataframe(comparison_df, width='stretch')
+
+def display_rolling_backtest_results(results):
+    """Display rolling backtest (walk-forward validation) results."""
+    
+    backtest_results = results.get('rolling_backtest_results', {})
+    
+    if not backtest_results or not backtest_results.get('model_performance'):
+        st.warning("No rolling backtest results available.")
+        return
+    
+    # Display backtest summary
+    st.subheader("📊 Backtest Summary")
+    
+    fold_info = backtest_results.get('fold_info', [])
+    if fold_info:
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Total Folds", len(fold_info))
+        with col2:
+            if fold_info:
+                train_days = fold_info[0]['train_end'] - fold_info[0]['train_start']
+                st.metric("Training Window", f"{train_days} days")
+        with col3:
+            if fold_info:
+                test_days = fold_info[0]['test_end'] - fold_info[0]['test_start']
+                st.metric("Test Window", f"{test_days} days")
+    
+    # Model performance comparison across folds
+    st.subheader("📈 Model Performance Across Folds")
+    
+    model_performance = backtest_results.get('model_performance', {})
+    
+    if model_performance:
+        # Create performance summary table
+        performance_data = []
+        
+        for model_name, model_data in model_performance.items():
+            metrics = model_data.get('metrics', [])
+            if metrics:
+                # Calculate average metrics across all folds
+                avg_r2 = np.mean([m['r2'] for m in metrics])
+                avg_mae = np.mean([m['mae'] for m in metrics])
+                avg_rmse = np.mean([m['rmse'] for m in metrics])
+                avg_mape = np.mean([m['mape'] for m in metrics])
+                
+                # Calculate standard deviation for stability
+                std_r2 = np.std([m['r2'] for m in metrics])
+                std_mae = np.std([m['mae'] for m in metrics])
+                std_rmse = np.std([m['rmse'] for m in metrics])
+                std_mape = np.std([m['mape'] for m in metrics])
+                
+                performance_data.append({
+                    'Model': model_name.replace('_', ' ').title(),
+                    'Avg R²': f"{avg_r2:.3f} ± {std_r2:.3f}",
+                    'Avg MAE': f"{avg_mae:.3f} ± {std_mae:.3f}",
+                    'Avg RMSE': f"{avg_rmse:.3f} ± {std_rmse:.3f}",
+                    'Avg MAPE': f"{avg_mape:.1f}% ± {std_mape:.1f}%",
+                    'Folds': len(metrics)
+                })
+        
+        if performance_data:
+            performance_df = pd.DataFrame(performance_data)
+            st.dataframe(performance_df, width='stretch')
+            
+            # Find best performing model
+            best_model = max(performance_data, key=lambda x: float(x['Avg R²'].split(' ± ')[0]))
+            st.success(f"🏆 **Best Model**: {best_model['Model']} (R² = {best_model['Avg R²']})")
+    
+    # Performance stability analysis
+    st.subheader("📊 Performance Stability Analysis")
+    
+    if model_performance:
+        # Create stability chart
+        stability_data = []
+        
+        for model_name, model_data in model_performance.items():
+            metrics = model_data.get('metrics', [])
+            if metrics:
+                for metric in metrics:
+                    stability_data.append({
+                        'Model': model_name.replace('_', ' ').title(),
+                        'Fold': metric['fold'],
+                        'R²': metric['r2'],
+                        'MAE': metric['mae'],
+                        'RMSE': metric['rmse'],
+                        'MAPE': metric['mape']
+                    })
+        
+        if stability_data:
+            stability_df = pd.DataFrame(stability_data)
+            
+            # R² stability chart
+            fig_r2 = px.line(
+                stability_df, 
+                x='Fold', 
+                y='R²', 
+                color='Model',
+                title='R² Score Stability Across Folds',
+                markers=True
+            )
+            fig_r2.update_layout(height=400)
+            st.plotly_chart(fig_r2, use_container_width=True)
+            
+            # MAE stability chart
+            fig_mae = px.line(
+                stability_df, 
+                x='Fold', 
+                y='MAE', 
+                color='Model',
+                title='MAE Stability Across Folds',
+                markers=True
+            )
+            fig_mae.update_layout(height=400)
+            st.plotly_chart(fig_mae, use_container_width=True)
+    
+    # Fold-by-fold analysis
+    st.subheader("📋 Fold-by-Fold Analysis")
+    
+    if fold_info:
+        # Create fold summary table
+        fold_data = []
+        
+        for fold in fold_info:
+            fold_data.append({
+                'Fold': fold['fold'],
+                'Train Period': f"{fold['train_dates'][0].strftime('%Y-%m-%d')} to {fold['train_dates'][1].strftime('%Y-%m-%d')}",
+                'Test Period': f"{fold['test_dates'][0].strftime('%Y-%m-%d')} to {fold['test_dates'][1].strftime('%Y-%m-%d')}",
+                'Train Days': fold['train_end'] - fold['train_start'],
+                'Test Days': fold['test_end'] - fold['test_start']
+            })
+        
+        fold_df = pd.DataFrame(fold_data)
+        st.dataframe(fold_df, width='stretch')
+    
+    # Key insights
+    st.subheader("💡 Key Insights")
+    
+    if model_performance and fold_info:
+        # Calculate insights
+        total_folds = len(fold_info)
+        
+        # Find most stable model (lowest std deviation in R²)
+        model_stability = {}
+        for model_name, model_data in model_performance.items():
+            metrics = model_data.get('metrics', [])
+            if metrics:
+                r2_values = [m['r2'] for m in metrics]
+                model_stability[model_name] = np.std(r2_values)
+        
+        if model_stability:
+            most_stable = min(model_stability.keys(), key=lambda x: model_stability[x])
+            st.info(f"🎯 **Most Stable Model**: {most_stable.replace('_', ' ').title()} (R² std: {model_stability[most_stable]:.3f})")
+        
+        # Performance consistency
+        st.markdown(f"""
+        **Rolling Backtest Insights:**
+        - **Total Folds**: {total_folds} time periods tested
+        - **Validation Method**: Walk-forward validation (no data leakage)
+        - **Target**: Returns-based prediction (better stationarity)
+        - **Evaluation**: Each model tested on {fold_info[0]['test_end'] - fold_info[0]['test_start']} days of unseen data per fold
+        
+        **Benefits of Rolling Backtest:**
+        - ✅ Tests model performance across different market conditions
+        - ✅ Provides more robust evaluation than single train/test split
+        - ✅ Shows model stability over time
+        - ✅ Identifies models that work consistently across periods
+        """)
 
 def display_investment_results(results):
     """Display investment calculator results."""
