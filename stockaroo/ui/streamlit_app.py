@@ -13,7 +13,13 @@ from datetime import datetime, timedelta
 import warnings
 import importlib
 import sys
+import os
 warnings.filterwarnings('ignore')
+
+# Add the project root to the Python path for deployment
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 # Force reload modules to ensure latest changes are loaded
 if 'stockaroo.data.collector' in sys.modules:
@@ -21,9 +27,14 @@ if 'stockaroo.data.collector' in sys.modules:
 if 'stockaroo.models.predictor' in sys.modules:
     importlib.reload(sys.modules['stockaroo.models.predictor'])
 
-# Import our custom modules
-from stockaroo.data.collector import StockDataCollector
-from stockaroo.models.predictor import StockPredictor
+# Import our custom modules with fallback
+try:
+    from stockaroo.data.collector import StockDataCollector
+    from stockaroo.models.predictor import StockPredictor
+except ImportError as e:
+    st.error(f"Import error: {e}")
+    st.error("Please ensure the stockaroo package is properly installed.")
+    st.stop()
 
 # Page configuration
 st.set_page_config(
